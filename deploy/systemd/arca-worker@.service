@@ -1,0 +1,72 @@
+[Unit]
+Description=ArcaPanel worker %i (Playwright -> portal ARCA)
+After=network-online.target arca-api.service
+Wants=network-online.target
+PartOf=arca-workers.target
+
+[Service]
+Type=simple
+User=arcapanel
+Group=arcapanel
+
+# TODAS las instancias comparten este directorio a proposito: asi comparten
+# .sessions/ y reutilizan la sesion de Playwright por cliente. Un directorio por
+# instancia multiplicaria los logins contra ARCA, que es justo lo que conviene
+# minimizar. No hay riesgo de pisarse: dos jobs de la misma cuenta ya quedan
+# serializados por arca_sync_locks.
+WorkingDirectory=/opt/arcapanel/arca-worker
+
+ExecStart=/opt/arcapanel/arca-worker/node_modules/.bin/tsx src/index.ts
+
+# %i es el sufijo de la instancia: arca-worker@1 -> worker-1.
+#
+# TIENE que ser unico por proceso. La propiedad del lease se chequea por
+# worker_id, asi que dos instancias con el mismo id pueden renovar y cerrar los
+# jobs de la otra. Con la plantilla esto sale bien solo; el error aparece cuando
+# alguien copia la unidad y hardcodea el valor.
+Environment=WORKER_ID=worker-%i
+Environment=NODE_ENV=production
+
+# Con ProtectHome=true el default de Playwright (~/.cache/ms-playwright) queda
+# inaccesible. El navegador se instala una sola vez en esta ruta compartida.
+Environment=PLAYWRIGHT_BROWSERS_PATH=/opt/arcapanel/.playwright
+
+Restart=always
+RestartSec=10s
+
+# El worker atiende SIGTERM cerrando el loop, pero TERMINA el job en curso: una
+# sincronizacion completa son cuatro modulos y puede tardar varios minutos. El
+# drenaje es lento a proposito.
+#
+# Si preferis reinicios rapidos, bajalo sin culpa: al vencer el lease,
+# `recuperarJobsInterrumpidos` cierra el job y libera el candado de la cuenta.
+TimeoutStopSec=20min
+
+# Un Chromium con fuga no puede voltear la VM entera. Si el kernel lo mata por
+# memoria, el lease vence y el job se recupera solo.
+MemoryHigh=1G
+MemoryMax=1500M
+
+# --- Aislamiento -----------------------------------------------------------
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+# Escribe .sessions/ y .artifacts/ en su modulo, y la BASE, que vive en el de
+# la API. Sin el segundo path el worker no puede tomar un solo job.
+ReadWritePaths=/opt/arcapanel/arca-worker /opt/arcapanel/arca-api
+ProtectKernelTunables=true
+ProtectKernelModules=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+
+# OJO: NO agregar RestrictNamespaces=true ni PrivateUsers=true.
+#
+# El sandbox de Chromium usa user namespaces y se rompe con cualquiera de los
+# dos. La tentacion entonces es lanzar Chromium con --no-sandbox: no lo hagas.
+# Este proceso descifra claves fiscales de terceros y renderiza HTML remoto en
+# el mismo host; el sandbox del navegador es la frontera entre las dos cosas.
+
+[Install]
+WantedBy=arca-workers.target

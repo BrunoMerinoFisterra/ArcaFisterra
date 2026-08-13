@@ -1,0 +1,25 @@
+**/node_modules/
+**/dist/
+**/*.tsbuildinfo
+
+**/.env
+**/.env.local
+.env.production
+**/*.db
+**/*.db-journal
+**/*.db-wal
+**/*.db-shm
+**/*.db.bak
+
+**/.artifacts/
+**/.sessions/
+**/.data/
+
+# Logs de corridas locales (npm run dev:*, worker:once). Pueden contener CUITs
+# reales y detalle de comprobantes de clientes efectivos: no son solo ruido.
+.run/
+.run-logs/
+
+# Config local de Claude Code (permisos de esta maquina/sesion). No es un
+# secreto, pero es de esta maquina — no del proyecto.
+.claude/settings.local.json

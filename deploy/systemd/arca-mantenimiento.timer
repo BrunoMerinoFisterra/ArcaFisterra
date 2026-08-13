@@ -1,0 +1,18 @@
+[Unit]
+Description=Mantenimiento nocturno de ArcaPanel
+
+[Timer]
+# 03:30 hora local de la VM. Poné el huso con:
+#   sudo timedatectl set-timezone America/Argentina/Buenos_Aires
+OnCalendar=*-*-* 03:30:00
+
+# Desfasa el arranque para no clavar todo a la misma hora exacta.
+RandomizedDelaySec=15min
+
+# Si la VM estuvo apagada a esa hora, corre en el proximo arranque en vez de
+# saltear la noche. En un servidor de estudio que se reinicia, esto es la
+# diferencia entre tener respaldo y creer que lo tenes.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

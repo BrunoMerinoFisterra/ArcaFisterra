@@ -1,0 +1,18 @@
+{
+  "name": "arcapanel-local",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Scripts de orquestacion local de ArcaPanel",
+  "scripts": {
+    "dev:api": "npm --prefix arca-api run dev",
+    "dev:app": "npm --prefix arca-app run dev",
+    "dev:worker": "npm --prefix arca-worker run dev",
+    "worker:once": "npm --prefix arca-worker run once",
+    "worker:check": "npm --prefix arca-worker run check:local",
+    "demo:crear": "npm --prefix arca-api run demo:crear",
+    "typecheck": "npm --prefix arca-api run typecheck && npm --prefix arca-app run typecheck && npm --prefix arca-worker run typecheck",
+    "test": "npm --prefix arca-api test && npm --prefix arca-worker test",
+    "build": "npm --prefix arca-app run build",
+    "check": "npm run typecheck && npm test && npm run build"
+  }
+}

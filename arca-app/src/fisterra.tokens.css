@@ -1,0 +1,61 @@
+/* Fisterra — design tokens
+   Derivados de las piezas aprobadas: presentación 16:9 y post 1:1 de "Contabilidad e Impuestos".
+   Colores muestreados pixel a pixel; tipografía leída de las fuentes embebidas en los PDF. */
+
+:root {
+  /* ---------- Marca ---------- */
+  --fs-red: #F52125;              /* acento primario: titulares, isotipo cara izquierda, CTA */
+  --fs-red-deep: #9C3032;         /* cara derecha del isotipo, hover/pressed sobre rojo */
+  --fs-navy: #0A2F43;             /* institucional: pills, tab activa, superficies oscuras */
+  --fs-ink: #202B56;              /* tipografía: subtítulos y cuerpo (azul tinta, no negro) */
+
+  /* ---------- Neutrales ---------- */
+  --fs-surface: #D7D8DD;          /* fondo de página base */
+  --fs-surface-low: #B8C4D4;      /* extremo frío del degradé de fondo */
+  --fs-surface-high: #E4E5E9;     /* extremo claro del degradé de fondo */
+  --fs-steel: #A3ABB6;            /* tab inactiva, chips secundarios */
+  --fs-steel-deep: #6E7A88;       /* texto sobre steel, bordes */
+  --fs-white: #FFFFFF;
+
+  /* ---------- Degradés de marca ---------- */
+  /* Pill / tab activa. El degradé corre de acero claro a navy y es direccional: siempre
+     de claro a oscuro en el sentido de lectura. */
+  --fs-gradient-navy: linear-gradient(100deg, #A8B4C4 0%, #15384B 45%, #0A2F43 100%);
+  --fs-gradient-navy-solid: linear-gradient(100deg, #1C4257 0%, #0A2F43 100%);
+
+  /* Fondo de página: degradé diagonal muy sutil, casi imperceptible. */
+  --fs-gradient-surface: linear-gradient(160deg, #E4E5E9 0%, #D7D8DD 45%, #B8C4D4 100%);
+
+  /* Chip de paginación (1 /5) */
+  --fs-gradient-chip: linear-gradient(90deg, #C3CAD4 0%, #9FAFC2 100%);
+
+  /* ---------- Tipografía ---------- */
+  --fs-font: "Montserrat", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --fs-weight-regular: 400;
+  --fs-weight-medium: 500;
+  --fs-weight-semibold: 600;
+  --fs-weight-bold: 700;
+
+  /* Escala en px sobre lienzo de 1440 (16:9). Ver DESIGN-SYSTEM.md para el 1:1. */
+  --fs-text-display: 47px;        /* H1 pareado: Bold rojo + Regular navy */
+  --fs-text-pill: 40px;           /* rótulo de sección dentro del pill */
+  --fs-text-wordmark: 29px;       /* "FISTERRA" del lockup */
+  --fs-text-counter: 28px;        /* paginador n /N */
+  --fs-text-tab: 22px;            /* tabs de navegación */
+  --fs-text-body: 18px;           /* cuerpo */
+
+  --fs-leading-tight: 1.05;       /* titulares */
+  --fs-leading-body: 1.55;        /* cuerpo */
+  --fs-tracking-tab: 0.02em;
+
+  /* ---------- Radios ---------- */
+  --fs-radius-pill: 999px;        /* pills, chips, tabs, paginador */
+  --fs-radius-panel: 28px;        /* panel de contenido principal */
+  --fs-radius-media: 16px;        /* fotografías */
+  --fs-radius-tab: 12px 12px 0 0; /* tabs: solo esquinas superiores */
+
+  /* ---------- Trazos y sombras ---------- */
+  --fs-hairline: 1.5px solid rgba(255, 255, 255, 0.85);   /* borde del panel */
+  --fs-shadow-logo: 6px 8px 12px rgba(10, 47, 67, 0.18);  /* sombra proyectada del isotipo */
+  --fs-shadow-panel: 0 2px 20px rgba(10, 47, 67, 0.06);
+}

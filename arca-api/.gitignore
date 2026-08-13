@@ -1,0 +1,10 @@
+node_modules/
+dist/
+
+# Contiene JWT_SECRET y MASTER_KEY — nunca versionar.
+.env
+.env.local
+
+# Base local de desarrollo: contiene credenciales cifradas.
+*.db
+*.db-journal

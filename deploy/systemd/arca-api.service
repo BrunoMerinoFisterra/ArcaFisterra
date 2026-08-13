@@ -1,0 +1,46 @@
+[Unit]
+Description=ArcaPanel API (Express + SQLite)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=arcapanel
+Group=arcapanel
+WorkingDirectory=/opt/arcapanel/arca-api
+
+# tsx es el RUNTIME, no una herramienta de build: este proyecto no compila a JS.
+# Por eso node_modules TIENE que incluir devDependencies. Ver README.md.
+ExecStart=/opt/arcapanel/arca-api/node_modules/.bin/tsx src/index.ts
+
+Environment=NODE_ENV=production
+# PORT, JWT_SECRET, MASTER_KEY, SQLITE_PATH y SEMBRAR_DEMO los lee dotenv desde
+# /opt/arcapanel/arca-api/.env. No se duplican aca: el secreto vive en un solo
+# archivo, con permisos 600.
+
+Restart=always
+RestartSec=5s
+
+# --- Aislamiento -----------------------------------------------------------
+# Este proceso tiene la clave maestra en memoria: si lo comprometen, se
+# descifran todas las claves fiscales. El sandbox no es decorativo.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+# La base y sus archivos -wal/-shm viven junto al modulo.
+ReadWritePaths=/opt/arcapanel/arca-api
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+# La API no lanza navegadores, asi que aca si se pueden restringir namespaces.
+RestrictNamespaces=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target

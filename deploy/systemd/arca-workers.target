@@ -1,0 +1,10 @@
+[Unit]
+Description=Todos los workers de ArcaPanel
+# Agrupa las instancias arca-worker@N para poder arrancarlas, pararlas y
+# reiniciarlas juntas. Combinado con PartOf= en la plantilla, parar este target
+# para todos los workers sin tocar la API.
+After=arca-api.service
+Wants=arca-api.service
+
+[Install]
+WantedBy=multi-user.target

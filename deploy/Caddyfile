@@ -1,0 +1,63 @@
+# Caddy sirve el front estatico, termina TLS y hace de reverse proxy a la API.
+#
+# Cambia panel.fisterra.com.ar por tu dominio real. Caddy pide el certificado a
+# Let's Encrypt en el primer arranque y lo renueva solo: no hace falta certbot
+# ni un cron de renovacion.
+#
+# Requisito: el registro DNS tiene que apuntar a la VM ANTES de arrancar Caddy,
+# porque la validacion es por HTTP y necesita resolver el dominio.
+
+panel.fisterra.com.ar {
+	encode zstd gzip
+
+	# --- API ---------------------------------------------------------------
+	# handle_path (y no handle) SACA el prefijo /api antes de reenviar: las
+	# rutas de Express son /clientes y /sesion, no /api/clientes.
+	#
+	# La API escucha en localhost y nunca se expone directo a internet: el
+	# unico que le habla es este proxy.
+	handle_path /api/* {
+		reverse_proxy localhost:3001
+	}
+
+	# --- Front -------------------------------------------------------------
+	handle {
+		root * /opt/arcapanel/arca-app/dist
+
+		# react-router resuelve /clientes y /cliente/:id en el navegador; en el
+		# servidor esos archivos no existen. Sin esta linea, recargar con F5
+		# parado en una de esas rutas devuelve 404.
+		try_files {path} /index.html
+
+		file_server
+	}
+
+	# --- Cabeceras ---------------------------------------------------------
+	# La API no usa helmet, asi que las cabeceras de seguridad se agregan aca.
+	# Cubre el hueco sin tocar Express.
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "same-origin"
+
+		# connect-src 'self' alcanza porque el front pega a /api en el MISMO
+		# origen (VITE_API_URL=/api). Si algun dia la API vive en otro dominio,
+		# hay que listarlo aca.
+		#
+		# style-src permite inline porque algunos bundles inyectan estilos.
+		# Verificalo en la consola del navegador despues del primer deploy: si
+		# no hay violaciones, sacá 'unsafe-inline'.
+		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+
+		# El servidor no tiene por que anunciar que es.
+		-Server
+	}
+
+	log {
+		output file /var/log/caddy/arcapanel.log {
+			roll_size 10MiB
+			roll_keep 5
+		}
+	}
+}

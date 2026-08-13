@@ -1,0 +1,38 @@
+[Unit]
+Description=Respaldo de la base y poda de artifacts de ArcaPanel
+After=arca-api.service
+
+[Service]
+Type=oneshot
+User=arcapanel
+Group=arcapanel
+
+# Verificá la ruta real con `which node`: nodesource la deja en /usr/bin/node,
+# pero una instalacion por nvm queda en otro lado y systemd no lee tu PATH.
+ExecStart=/usr/bin/node /opt/arcapanel/deploy/scripts/mantenimiento.mjs
+
+Environment=ARCA_DB=/opt/arcapanel/arca-api/arca.db
+Environment=ARCA_RESPALDOS=/opt/arcapanel/respaldos
+Environment=ARCA_ARTIFACTS=/opt/arcapanel/arca-worker/.artifacts
+Environment=RETENCION_DIAS=14
+Environment=RETENCION_ARTIFACTS_DIAS=7
+
+# Empuje fuera de la VM. Un respaldo que vive en el mismo disco que la base no
+# es un respaldo: no te cubre si se pierde la VM o se suspende la cuenta.
+#
+# Descomentá cuando definas destino (rclone habla con Backblaze B2, R2, S3,
+# WebDAV). Y acordate: el destino recibe la BASE, nunca el .env.
+# ExecStartPost=/usr/bin/rclone copy /opt/arcapanel/respaldos remoto:arcapanel
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+# La base se abre solo para leer, pero en WAL hasta un lector necesita tocar
+# los archivos -wal y -shm. Por eso el modulo de la API va en lectura/escritura.
+ReadWritePaths=/opt/arcapanel/arca-api /opt/arcapanel/respaldos /opt/arcapanel/arca-worker/.artifacts
+ProtectKernelTunables=true
+ProtectKernelModules=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true

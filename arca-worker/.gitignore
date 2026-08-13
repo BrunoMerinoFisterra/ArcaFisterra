@@ -1,0 +1,11 @@
+node_modules/
+dist/
+
+# Credenciales y sesiones — NUNCA versionar
+.env
+.env.local
+.sessions/
+
+# Screenshots / HTML / CSVs que deja el spike al correr.
+# Pueden contener datos fiscales reales.
+.artifacts/

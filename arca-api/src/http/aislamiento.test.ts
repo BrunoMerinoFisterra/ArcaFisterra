@@ -1,0 +1,809 @@
+import assert from 'node:assert/strict';
+import { randomBytes } from 'node:crypto';
+import { describe, test } from 'node:test';
+import type { Config } from '../config.js';
+import { validarCuit } from '../dominio/cuit.js';
+import { crearRepositorioMemoria } from '../repo/memoria.js';
+import { crearRepositorioSqlite } from '../repo/sqlite.js';
+import type { Repositorio } from '../repo/tipos.js';
+import { crearApp } from './app.js';
+
+/**
+ * Aislamiento multi-tenant y no-filtración de credenciales.
+ *
+ * Es lo que más importa testear de esta API: una fuga acá expone los datos
+ * fiscales de un contribuyente a otro estudio. El plan lo pide explícitamente
+ * — "probarlo, no asumirlo".
+ *
+ * Todo corre contra LOS DOS repositorios. Ese es el punto de tener una
+ * interfaz: si el aislamiento vale en memoria pero se cae en SQL, el test lo
+ * dice. Cuando exista `mssql.ts` se agrega a MOTORES y queda cubierto sin
+ * escribir un test más.
+ *
+ * En los datos de demo, `ayudante` (u2) sólo tiene asignados c1 y c2.
+ */
+
+const config: Config = {
+  puerto: 0,
+  origenPermitido: '*',
+  jwtSecret: randomBytes(48).toString('base64'),
+  claveMaestra: randomBytes(32),
+  repositorio: 'memoria',
+  sqlitePath: ':memory:',
+  sembrarDemo: true,
+  produccion: false,
+};
+
+type CrearRepo = () => Promise<Repositorio>;
+
+const MOTORES: Array<[string, CrearRepo]> = [
+  ['memoria', () => crearRepositorioMemoria()],
+  ['sqlite', async () => crearRepositorioSqlite({ archivo: ':memory:' })],
+];
+
+async function levantar(crearRepo: CrearRepo) {
+  const repo = await crearRepo();
+  const server = crearApp(repo, config).listen(0);
+  await new Promise((r) => server.once('listening', r));
+  const dir = server.address();
+  if (!dir || typeof dir === 'string') throw new Error('sin puerto');
+  const base = `http://127.0.0.1:${dir.port}`;
+
+  const loginConPassword = async (email: string, password: string) => {
+    const r = await fetch(`${base}/sesion/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    });
+    assert.equal(r.status, 200, `login de ${email}`);
+    return ((await r.json()) as { token: string }).token;
+  };
+  const login = (email: string) => loginConPassword(email, 'demo');
+
+  const get = (ruta: string, token?: string) =>
+    fetch(`${base}${ruta}`, token ? { headers: { authorization: `Bearer ${token}` } } : undefined);
+
+  const enviar = (ruta: string, metodo: string, token: string, cuerpo?: unknown) =>
+    fetch(`${base}${ruta}`, {
+      method: metodo,
+      headers: {
+        authorization: `Bearer ${token}`,
+        ...(cuerpo ? { 'content-type': 'application/json' } : {}),
+      },
+      ...(cuerpo ? { body: JSON.stringify(cuerpo) } : {}),
+    });
+
+  const cerrar = async () => {
+    await new Promise((r) => server.close(r));
+    (repo as { cerrar?: () => void }).cerrar?.();
+  };
+
+  return { base, repo, login, loginConPassword, get, enviar, cerrar };
+}
+
+for (const [motor, crearRepo] of MOTORES) {
+  describe(`repositorio ${motor}`, () => {
+    test('sin token no se accede a nada', async () => {
+      const s = await levantar(crearRepo);
+      try {
+        assert.equal((await s.get('/clientes')).status, 401);
+        assert.equal((await s.get('/clientes/c1')).status, 401);
+        assert.equal((await s.get('/usuarios')).status, 401);
+      } finally {
+        await s.cerrar();
+      }
+    });
+
+    test('un token inventado se rechaza', async () => {
+      const s = await levantar(crearRepo);
+      try {
+        assert.equal((await s.get('/clientes', 'no.es.un.jwt')).status, 401);
+      } finally {
+        await s.cerrar();
+      }
+    });
+
+    test('cada usuario ve sólo los clientes que tiene asignados', async () => {
+      const s = await levantar(crearRepo);
+      try {
+        const admin = await s.login('bruno@fisterra.com');
+        const ayudante = await s.login('ayudante@fisterra.com');
+
+        const deAdmin = (await (await s.get('/clientes', admin)).json()) as unknown[];
+        const deAyudante = (await (await s.get('/clientes', ayudante)).json()) as unknown[];
+
+        assert.equal(deAdmin.length, 6);
+        assert.equal(deAyudante.length, 2);
+      } finally {
+        await s.cerrar();
+      }
+    });
+
+    test('pegarle directo al id de un cliente ajeno da 404, no sus datos', async () => {
+      const s = await levantar(crearRepo);
+      try {
+        const ayudante = await s.login('ayudante@fisterra.com');
+
+        assert.equal((await s.get('/clientes/c1', ayudante)).status, 200);
+
+        // c3 a c6 no los tiene asignados. 404 y no 403: un 403 confirmaría
+        // que el id existe.
+        for (const id of ['c3', 'c4', 'c5', 'c6']) {
+          const r = await s.get(`/clientes/${id}`, ayudante);
+          assert.equal(r.status, 404, `cliente ajeno ${id}`);
+          const cuerpo = await r.text();
+          assert.ok(!cuerpo.includes('Textil'), 'no debe filtrar la razón social');
+          assert.ok(!cuerpo.includes('69874521'), 'no debe filtrar el CUIT');
+        }
+      } finally {
+        await s.cerrar();
+      }
+    });
+
+    test('un usuario común gestiona pero no puede rotar sus clientes', async () => {
+      const s = await levantar(crearRepo);
+      try {
+        const ayudante = await s.login('ayudante@fisterra.com');
+        const alta = await s.enviar('/clientes', 'POST', ayudante, {
+          cuit: '30-00000000-7',
+          razonSocial: 'Cliente del ayudante S.A.',
+        });
+        assert.equal(alta.status, 201);
+        const cliente = (await alta.json()) as { id: string };
+
+        const credencial = await s.enviar(`/clientes/${cliente.id}/credencial`, 'POST', ayudante, {
+          usuarioCuit: '30-00000000-7',
+          clave: 'Clave-ficticia',
+        });
+        assert.equal(credencial.status, 200);
+        assert.equal((await s.enviar(`/clientes/${cliente.id}`, 'DELETE', ayudante)).status, 403);
+        assert.equal((await s.get(`/clientes/${cliente.id}`, ayudante)).status, 200);
+
+        // La baja se hace exclusivamente desde la gestión administrativa.
+        const admin = await s.login('bruno@fisterra.com');
+        assert.equal(
+          (await s.enviar(`/usuarios/u2/clientes/${cliente.id}`, 'DELETE', admin)).status,
+          204,
+        );
+        assert.equal((await s.get(`/clientes/${cliente.id}`, ayudante)).status, 404);
+
+        // Si estaba compartido, sólo se quita de la cuenta indicada.
+        assert.equal((await s.enviar('/clientes/c1', 'DELETE', ayudante)).status, 403);
+        assert.equal((await s.enviar('/usuarios/u2/clientes/c1', 'DELETE', admin)).status, 204);
+        assert.equal((await s.get('/clientes/c1', ayudante)).status, 404);
+        assert.equal((await s.get('/clientes/c1', admin)).status, 200);
+      } finally {
+        await s.cerrar();
+      }
+    });
+
+    test('el admin crea, limita, pausa y reactiva cuentas de usuario', async () => {
+      const s = await levantar(crearRepo);
+      try {
+        const admin = await s.login('bruno@fisterra.com');
+        const ayudante = await s.login('ayudante@fisterra.com');
+        assert.equal((await s.get('/usuarios', ayudante)).status, 403);
+
+        const altaUsuario = await s.enviar('/usuarios', 'POST', admin, {
+          nombre: 'Cuenta Nueva',
+          email: 'cuenta.nueva@fisterra.com',
+          password: 'secreto-demo',
+          limiteClientes: 1,
+        });
+        assert.equal(altaUsuario.status, 201);
+        const cuenta = (await altaUsuario.json()) as {
+          id: string;
+          limiteClientes: number;
+          clientesAsignados: number;
+        };
+        assert.equal(cuenta.limiteClientes, 1);
+        assert.equal(cuenta.clientesAsignados, 0);
+
+        const tokenCuenta = await s.loginConPassword(
+          'cuenta.nueva@fisterra.com',
+          'secreto-demo',
+        );
+        const primerCliente = await s.enviar('/clientes', 'POST', tokenCuenta, {
+          cuit: '30-00000000-7',
+          razonSocial: 'Primero S.A.',
+        });
+        assert.equal(primerCliente.status, 201);
+        const primero = (await primerCliente.json()) as { id: string };
+        const sinCupo = await s.enviar('/clientes', 'POST', tokenCuenta, {
+          cuit: '30-00000001-5',
+          razonSocial: 'Segundo S.A.',
+        });
+        assert.equal(sinCupo.status, 409);
+        assert.match(await sinCupo.text(), /límite de 1/i);
+
+        const ampliar = await s.enviar(`/usuarios/${cuenta.id}`, 'PATCH', admin, {
+          limiteClientes: 2,
+        });
+        assert.equal(ampliar.status, 200);
+        const segundoCliente = await s.enviar('/clientes', 'POST', tokenCuenta, {
+          cuit: '30-00000001-5',
+          razonSocial: 'Segundo S.A.',
+        });
+        assert.equal(segundoCliente.status, 201);
+        const segundo = (await segundoCliente.json()) as { id: string };
+
+        const reducir = await s.enviar(`/usuarios/${cuenta.id}`, 'PATCH', admin, {
+          limiteClientes: 1,
+        });
+        assert.equal(reducir.status, 200);
+
+        // Al quedar fuera de cupo, toda la información fiscal se bloquea,
+        // incluso con un token que ya estaba abierto.
+        const tableroBloqueado = await s.get('/clientes', tokenCuenta);
+        assert.equal(tableroBloqueado.status, 409);
+        assert.match(await tableroBloqueado.text(), /2 clientes activos.*cupo de 1/i);
+        assert.equal((await s.get(`/clientes/${primero.id}`, tokenCuenta)).status, 409);
+        assert.equal(
+          (await s.enviar(`/clientes/${primero.id}/credencial`, 'POST', tokenCuenta, {
+            usuarioCuit: '30-00000000-7',
+            clave: 'no-debe-guardarse',
+          })).status,
+          409,
+        );
+
+        // La cuenta sólo conserva su lista básica: tampoco puede usar la baja
+        // para rotar empresas y reutilizar el cupo.
+        const administracion = await s.get('/clientes/administracion', tokenCuenta);
+        assert.equal(administracion.status, 200);
+        const estadoCupo = (await administracion.json()) as {
+          clientes: Array<{ id: string }>;
+          cantidadClientes: number;
+          limiteClientes: number;
+          excedido: boolean;
+        };
+        assert.equal(estadoCupo.cantidadClientes, 2);
+        assert.equal(estadoCupo.limiteClientes, 1);
+        assert.equal(estadoCupo.excedido, true);
+        assert.equal(estadoCupo.clientes.length, 2);
+
+        assert.equal((await s.enviar(`/clientes/${segundo.id}`, 'DELETE', tokenCuenta)).status, 403);
+        const usuariosGestion = (await (await s.get('/usuarios', admin)).json()) as Array<{
+          id: string;
+          clientes: Array<{ id: string; cuit: string; razonSocial: string }>;
+        }>;
+        const cuentaGestion = usuariosGestion.find((usuario) => usuario.id === cuenta.id);
+        assert.equal(cuentaGestion?.clientes.length, 2);
+        assert.equal(cuentaGestion?.clientes.some((cliente) => cliente.id === segundo.id), true);
+        assert.equal(
+          (await s.enviar(`/usuarios/${cuenta.id}/clientes/${segundo.id}`, 'DELETE', admin)).status,
+          204,
+        );
+        assert.equal((await s.get('/clientes', tokenCuenta)).status, 200);
+        assert.equal((await s.get(`/clientes/${primero.id}`, tokenCuenta)).status, 200);
+
+        assert.equal(
+          (await s.enviar(`/usuarios/${cuenta.id}`, 'PATCH', admin, { activo: false })).status,
+          200,
+        );
+        // La pausa invalida incluso el token que ya estaba abierto.
+        assert.equal((await s.get('/clientes', tokenCuenta)).status, 401);
+
+        const loginPausado = await fetch(`${s.base}/sesion/login`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ email: 'cuenta.nueva@fisterra.com', password: 'secreto-demo' }),
+        });
+        assert.equal(loginPausado.status, 401);
+
+        assert.equal(
+          (await s.enviar(`/usuarios/${cuenta.id}`, 'PATCH', admin, { activo: true })).status,
+          200,
+        );
+        await s.loginConPassword('cuenta.nueva@fisterra.com', 'secreto-demo');
+      } finally {
+        await s.cerrar();
+      }
+    });
+
+    test('ninguna respuesta incluye la clave fiscal ni nada cifrado', async () => {
+      const s = await levantar(crearRepo);
+      try {
+        const admin = await s.login('bruno@fisterra.com');
+        const guardar = await s.enviar('/clientes/c1/credencial', 'POST', admin, {
+          usuarioCuit: '30-71234567-1',
+          clave: 'SUPER-SECRETO-12345',
+        });
+        assert.equal(guardar.status, 200);
+
+        for (const ruta of ['/clientes', '/clientes/c1', '/usuarios']) {
+          const cuerpo = await (await s.get(ruta, admin)).text();
+          assert.ok(!cuerpo.includes('SUPER-SECRETO-12345'), `${ruta} filtra la clave`);
+          assert.ok(!cuerpo.includes('ciphertext'), `${ruta} expone el ciphertext`);
+          assert.ok(!cuerpo.includes('dekEnvuelta'), `${ruta} expone la DEK`);
+        }
+      } finally {
+        await s.cerrar();
+      }
+    });
+
+    test('vista y adjuntos del DFE respetan el cliente autenticado', async () => {
+      const s = await levantar(crearRepo);
+      try {
+        const admin = await s.login('bruno@fisterra.com');
+        const ayudante = await s.login('ayudante@fisterra.com');
+        const contenido = new TextEncoder().encode('contenido adjunto');
+        await s.repo.guardarNotificaciones('c1', [{
+          idComunicacion: 'DFE-HTTP-1',
+          fecha: '2026-08-05',
+          organismo: 'ARCA',
+          asunto: 'Prueba HTTP',
+          leida: false,
+          detalle: {
+            cuerpo: 'Detalle local',
+            adjuntos: [{
+              idArchivo: 'archivo-1',
+              nombre: 'prueba fiscal.pdf',
+              mimeType: 'application/pdf',
+              tamano: contenido.byteLength,
+              sha256: 'sha-http',
+              contenido,
+            }],
+          },
+        }]);
+        const notificacion = (await s.repo.notificacionesDe('c1')).find(
+          (candidata) => candidata.idComunicacion === 'DFE-HTTP-1',
+        );
+        assert.ok(notificacion);
+
+        const vista = await s.enviar(
+          `/clientes/c1/notificaciones/${notificacion.id}/vista`,
+          'POST',
+          ayudante,
+        );
+        assert.equal(vista.status, 200);
+        assert.equal(((await vista.json()) as { estado: string }).estado, 'VISTA');
+
+        const descarga = await s.get(
+          `/clientes/c1/notificaciones/${notificacion.id}/adjuntos/${notificacion.adjuntos[0]!.id}`,
+          admin,
+        );
+        assert.equal(descarga.status, 200);
+        assert.equal(descarga.headers.get('content-type'), 'application/pdf');
+        assert.deepEqual(new Uint8Array(await descarga.arrayBuffer()), contenido);
+
+        assert.equal(
+          (
+            await s.enviar(
+              `/clientes/c3/notificaciones/${notificacion.id}/vista`,
+              'POST',
+              ayudante,
+            )
+          ).status,
+          404,
+        );
+        assert.equal(
+          (
+            await s.get(
+              `/clientes/c2/notificaciones/${notificacion.id}/adjuntos/${notificacion.adjuntos[0]!.id}`,
+              admin,
+            )
+          ).status,
+          404,
+        );
+      } finally {
+        await s.cerrar();
+      }
+    });
+
+    test('la lectura local de notificaciones y planes es reversible y aislada', async () => {
+      const s = await levantar(crearRepo);
+      try {
+        const admin = await s.login('bruno@fisterra.com');
+        const ayudante = await s.login('ayudante@fisterra.com');
+        const notificacion = (await s.repo.notificacionesDe('c1'))[0];
+        const plan = (await s.repo.planesDe('c1'))[0];
+        assert.ok(notificacion);
+        assert.ok(plan);
+        assert.equal(notificacion.leidoAppEn, null);
+        assert.equal(plan.leidoAppEn, null);
+
+        const notificacionLeida = await s.enviar(
+          `/clientes/c1/notificaciones/${notificacion.id}/lectura`,
+          'PATCH',
+          ayudante,
+          { leido: true },
+        );
+        assert.equal(notificacionLeida.status, 200);
+        assert.ok(((await notificacionLeida.json()) as { leidoAppEn: string }).leidoAppEn);
+
+        const planLeido = await s.enviar(
+          `/clientes/c1/planes/${plan.id}/lectura`,
+          'PATCH',
+          admin,
+          { leido: true },
+        );
+        assert.equal(planLeido.status, 200);
+        assert.ok(((await planLeido.json()) as { leidoAppEn: string }).leidoAppEn);
+
+        const planNoLeido = await s.enviar(
+          `/clientes/c1/planes/${plan.id}/lectura`,
+          'PATCH',
+          admin,
+          { leido: false },
+        );
+        assert.equal(planNoLeido.status, 200);
+        assert.equal(((await planNoLeido.json()) as { leidoAppEn: null }).leidoAppEn, null);
+
+        assert.equal(
+          (
+            await s.enviar(
+              `/clientes/c3/notificaciones/${notificacion.id}/lectura`,
+              'PATCH',
+              ayudante,
+              { leido: true },
+            )
+          ).status,
+          404,
+        );
+      } finally {
+        await s.cerrar();
+      }
+    });
+
+    test('la credencial guardada se puede recuperar y descifrar', async () => {
+      const s = await levantar(crearRepo);
+      try {
+        const admin = await s.login('bruno@fisterra.com');
+        await s.enviar('/clientes/c1/credencial', 'POST', admin, {
+          usuarioCuit: '30-71234567-1',
+          clave: 'Cl4ve-Fiscal',
+        });
+
+        // Esto es lo que hará el worker: leer el cifrado y descifrarlo.
+        const guardada = await s.repo.leerCredencialCifrada('c1');
+        assert.ok(guardada, 'debería haberse guardado');
+        const { descifrarAccesoArca } = await import('../crypto/envelope.js');
+        assert.deepEqual(descifrarAccesoArca(config.claveMaestra, guardada, 'CUIT-LEGACY'), {
+          usuarioCuit: '30712345671',
+          clave: 'Cl4ve-Fiscal',
+        });
+      } finally {
+        await s.cerrar();
+      }
+    });
+
+    test('se puede cargar el acceso ARCA en el modo local', async () => {
+      const s = await levantar(crearRepo);
+      try {
+        const admin = await s.login('bruno@fisterra.com');
+        const r = await s.enviar('/clientes/c6/credencial', 'POST', admin, {
+          usuarioCuit: '20-25478963-2',
+          clave: 'lo-que-sea',
+        });
+        assert.equal(r.status, 200);
+      } finally {
+        await s.cerrar();
+      }
+    });
+
+    test('dar de baja un cliente se lleva su credencial', async () => {
+      const s = await levantar(crearRepo);
+      try {
+        const admin = await s.login('bruno@fisterra.com');
+        const alta = await s.enviar('/clientes', 'POST', admin, {
+          cuit: '30-00000000-7',
+          razonSocial: 'Cliente descartable S.A.',
+        });
+        assert.equal(alta.status, 201);
+        const cliente = (await alta.json()) as { id: string };
+        await s.enviar(`/clientes/${cliente.id}/credencial`, 'POST', admin, {
+          usuarioCuit: '30-00000000-7',
+          clave: 'algo',
+        });
+        assert.ok(await s.repo.leerCredencialCifrada(cliente.id));
+
+        assert.equal((await s.enviar(`/clientes/${cliente.id}`, 'DELETE', admin)).status, 204);
+        assert.equal(
+          await s.repo.leerCredencialCifrada(cliente.id),
+          null,
+          'quedó una clave huérfana',
+        );
+      } finally {
+        await s.cerrar();
+      }
+    });
+
+    test('el login rechaza password incorrecta igual que un email inexistente', async () => {
+      const s = await levantar(crearRepo);
+      try {
+        const pedir = async (email: string, password: string) => {
+          const r = await fetch(`${s.base}/sesion/login`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ email, password }),
+          });
+          return { status: r.status, cuerpo: await r.text() };
+        };
+
+        const malPass = await pedir('bruno@fisterra.com', 'incorrecta');
+        const noExiste = await pedir('nadie@fisterra.com', 'incorrecta');
+
+        assert.equal(malPass.status, 401);
+        assert.equal(noExiste.status, 401);
+        assert.equal(malPass.cuerpo, noExiste.cuerpo, 'los mensajes deben ser idénticos');
+      } finally {
+        await s.cerrar();
+      }
+    });
+
+    test('rechaza un CUIT con dígito verificador inválido', async () => {
+      const s = await levantar(crearRepo);
+      try {
+        const admin = await s.login('bruno@fisterra.com');
+        const r = await s.enviar('/clientes', 'POST', admin, {
+          cuit: '30-71234567-0',
+          razonSocial: 'CUIT Trucho S.A.',
+        });
+        assert.equal(r.status, 400);
+      } finally {
+        await s.cerrar();
+      }
+    });
+
+    test('todos los CUIT sembrados pasan la validación de la propia API', async () => {
+      // Los datos de demo entran directo al repositorio, sin pasar por el alta,
+      // así que nada impide sembrar un CUIT con dígito verificador inválido.
+      // Cuando pasó, el seed traía 11 de 12 mal: alguien copiando un CUIT de
+      // demo para probar el alta recibía un rechazo que parecía un bug de la app.
+      const s = await levantar(crearRepo);
+      try {
+        const admin = await s.login('bruno@fisterra.com');
+        const clientes = (await (await s.get('/clientes', admin)).json()) as Array<{
+          cliente: { cuit: string; razonSocial: string };
+        }>;
+
+        for (const { cliente } of clientes) {
+          assert.equal(
+            validarCuit(cliente.cuit),
+            null,
+            `${cliente.razonSocial} tiene un CUIT inválido: ${cliente.cuit}`,
+          );
+        }
+      } finally {
+        await s.cerrar();
+      }
+    });
+
+    test('sincronizar el mismo período dos veces no duplica comprobantes', async () => {
+      // Verificación #3 del plan. Es la garantía de todo el sync: sin esto,
+      // cada corrida infla los totales y el contador ve números falsos.
+      const s = await levantar(crearRepo);
+      try {
+        const lote = [
+          {
+            tipo: 'RECIBIDO' as const,
+            fecha: '2026-07-15',
+            codigoComprobante: 1,
+            tipoComprobante: 'Factura A',
+            puntoVenta: 9,
+            numero: 12_345,
+            contraparte: 'Proveedor Testigo S.A.',
+            cuitContraparte: '30-71000111-8',
+            neto: 100_000,
+            iva: 21_000,
+            total: 121_000,
+          },
+        ];
+
+        const antes = (await s.repo.comprobantesDe('c1')).length;
+
+        const primera = await s.repo.guardarComprobantes('c1', lote);
+        assert.deepEqual(primera, { insertados: 1, repetidos: 0 });
+
+        const segunda = await s.repo.guardarComprobantes('c1', lote);
+        assert.deepEqual(segunda, { insertados: 0, repetidos: 1 }, 'la segunda corrida duplicó');
+
+        assert.equal((await s.repo.comprobantesDe('c1')).length, antes + 1);
+      } finally {
+        await s.cerrar();
+      }
+    });
+
+    test('un cliente no puede tener dos jobs activos del mismo módulo', async () => {
+      const s = await levantar(crearRepo);
+      try {
+        const primero = await s.repo.encolarSync('c1', 'mis-comprobantes');
+        const repetido = await s.repo.encolarSync('c1', 'mis-comprobantes');
+        assert.equal(repetido.id, primero.id, 'debería devolver el job activo existente');
+
+        const activos = (await s.repo.jobsDe('c1')).filter(
+          (j) => j.estado === 'PENDING' || j.estado === 'RUNNING',
+        );
+        assert.equal(activos.length, 1);
+
+        const ahora = new Date().toISOString();
+        const tomado = await s.repo.tomarProximoJob(
+          'worker-prueba',
+          ahora,
+          new Date(Date.now() + 60_000).toISOString(),
+        );
+        assert.equal(tomado?.id, primero.id);
+        assert.equal(tomado?.estado, 'RUNNING');
+        assert.equal((await s.repo.clienteParaSync('c1'))?.estadoSync, 'SINCRONIZANDO');
+
+        await s.repo.finalizarJob(primero.id, { estado: 'DONE' });
+        assert.equal((await s.repo.clienteParaSync('c1'))?.estadoSync, 'OK');
+
+        const siguiente = await s.repo.encolarSync('c1', 'mis-comprobantes');
+        assert.notEqual(siguiente.id, primero.id, 'después de terminar se puede encolar otro');
+
+        await s.repo.tomarProximoJob(
+          'worker-prueba',
+          new Date().toISOString(),
+          new Date(Date.now() + 500).toISOString(),
+        );
+        const recuperados = await s.repo.recuperarJobsInterrumpidos(
+          new Date(Date.now() + 1_000).toISOString(),
+          new Date(Date.now() - 60_000).toISOString(),
+        );
+        assert.equal(recuperados, 1);
+        assert.equal((await s.repo.clienteParaSync('c1'))?.estadoSync, 'ERROR');
+
+        const despuesDelCorte = await s.repo.encolarSync('c1', 'mis-comprobantes');
+        assert.notEqual(despuesDelCorte.id, siguiente.id);
+      } finally {
+        await s.cerrar();
+      }
+    });
+
+    test('la sincronización completa informa progreso y bloquea jobs superpuestos', async () => {
+      const s = await levantar(crearRepo);
+      try {
+        const admin = await s.login('bruno@fisterra.com');
+        const respuesta = await s.enviar('/clientes/c1/sincronizar-completa', 'POST', admin);
+        assert.equal(respuesta.status, 202);
+        const completo = (await respuesta.json()) as {
+          id: string;
+          modulo: string;
+          progresoActual: number;
+          progresoTotal: number;
+          pasoActual: string;
+        };
+        assert.equal(completo.modulo, 'sincronizacion-completa');
+        assert.equal(completo.progresoActual, 0);
+        assert.equal(completo.progresoTotal, 4);
+
+        const individual = await s.repo.encolarSync('c1', 'mis-comprobantes');
+        assert.equal(individual.id, completo.id, 'no debe superponer otra sesión del cliente');
+
+        const tomado = await s.repo.tomarProximoJob(
+          'worker-prueba',
+          new Date().toISOString(),
+          new Date(Date.now() + 60_000).toISOString(),
+        );
+        assert.equal(tomado?.id, completo.id);
+        await s.repo.actualizarProgresoJob(completo.id, {
+          actual: 2,
+          total: 4,
+          paso: 'Mis Facilidades',
+        });
+        const ejecutando = (await s.repo.jobsDe('c1')).find((job) => job.id === completo.id);
+        assert.equal(ejecutando?.progresoActual, 2);
+        assert.equal(ejecutando?.pasoActual, 'Mis Facilidades');
+
+        await s.repo.finalizarJob(completo.id, { estado: 'DONE' });
+        const terminado = (await s.repo.jobsDe('c1')).find((job) => job.id === completo.id);
+        assert.equal(terminado?.progresoActual, 4);
+        assert.equal(terminado?.pasoActual, 'Completado');
+      } finally {
+        await s.cerrar();
+      }
+    });
+
+    test('dos workers no pueden usar simultaneamente la misma cuenta ARCA', async () => {
+      const s = await levantar(crearRepo);
+      try {
+        const primero = await s.repo.encolarSync('c1', 'mis-comprobantes');
+        const segundo = await s.repo.encolarSync('c2', 'mis-comprobantes');
+        const ahora = new Date().toISOString();
+        const lease = new Date(Date.now() + 60_000).toISOString();
+        assert.equal((await s.repo.tomarProximoJob('worker-1', ahora, lease))?.id, primero.id);
+        assert.equal((await s.repo.tomarProximoJob('worker-2', ahora, lease))?.id, segundo.id);
+
+        const claveAnonima = 'hmac-cuenta-compartida';
+        assert.equal(
+          await s.repo.adquirirBloqueoCuenta(primero.id, 'worker-1', claveAnonima, ahora, lease),
+          true,
+        );
+        assert.equal(
+          await s.repo.adquirirBloqueoCuenta(segundo.id, 'worker-2', claveAnonima, ahora, lease),
+          false,
+        );
+
+        await s.repo.reencolarJob(segundo.id, 'worker-2', ahora, 'Esperando cuenta ARCA');
+        assert.equal(
+          (await s.repo.jobsDe('c2')).find((job) => job.id === segundo.id)?.estado,
+          'PENDING',
+        );
+
+        await s.repo.finalizarJob(primero.id, { estado: 'DONE' }, 'worker-1');
+        assert.equal((await s.repo.tomarProximoJob('worker-2', ahora, lease))?.id, segundo.id);
+        assert.equal(
+          await s.repo.adquirirBloqueoCuenta(segundo.id, 'worker-2', claveAnonima, ahora, lease),
+          true,
+        );
+      } finally {
+        await s.cerrar();
+      }
+    });
+
+    test('un worker sin propiedad no puede renovar ni cerrar un job ajeno', async () => {
+      const s = await levantar(crearRepo);
+      try {
+        const job = await s.repo.encolarSync('c1', 'mis-comprobantes');
+        const ahora = new Date().toISOString();
+        const lease = new Date(Date.now() + 60_000).toISOString();
+        await s.repo.tomarProximoJob('worker-dueno', ahora, lease);
+
+        assert.equal(await s.repo.renovarLeaseJob(job.id, 'worker-ajeno', lease), false);
+        await assert.rejects(
+          s.repo.finalizarJob(job.id, { estado: 'DONE' }, 'worker-ajeno'),
+          /no se pudo cerrar|no es propietario/,
+        );
+        await s.repo.finalizarJob(job.id, { estado: 'DONE' }, 'worker-dueno');
+      } finally {
+        await s.cerrar();
+      }
+    });
+
+    test('un lease vencido libera la cuenta ARCA para otro worker', async () => {
+      const s = await levantar(crearRepo);
+      try {
+        const primero = await s.repo.encolarSync('c1', 'mis-comprobantes');
+        const segundo = await s.repo.encolarSync('c2', 'mis-comprobantes');
+        const base = Date.now();
+        const ahora = new Date(base).toISOString();
+        const leaseCorto = new Date(base + 500).toISOString();
+        const leaseLargo = new Date(base + 60_000).toISOString();
+        await s.repo.tomarProximoJob('worker-caido', ahora, leaseCorto);
+        await s.repo.tomarProximoJob('worker-vivo', ahora, leaseLargo);
+        assert.equal(
+          await s.repo.adquirirBloqueoCuenta(
+            primero.id,
+            'worker-caido',
+            'cuenta-recuperable',
+            ahora,
+            leaseCorto,
+          ),
+          true,
+        );
+        assert.equal(
+          await s.repo.adquirirBloqueoCuenta(
+            segundo.id,
+            'worker-vivo',
+            'cuenta-recuperable',
+            ahora,
+            leaseLargo,
+          ),
+          false,
+        );
+
+        const despues = new Date(base + 1_000).toISOString();
+        assert.equal(
+          await s.repo.recuperarJobsInterrumpidos(
+            despues,
+            new Date(base - 60_000).toISOString(),
+          ),
+          1,
+        );
+        assert.equal(
+          await s.repo.adquirirBloqueoCuenta(
+            segundo.id,
+            'worker-vivo',
+            'cuenta-recuperable',
+            despues,
+            leaseLargo,
+          ),
+          true,
+        );
+      } finally {
+        await s.cerrar();
+      }
+    });
+  });
+}
