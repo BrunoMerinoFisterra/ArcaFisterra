@@ -361,6 +361,15 @@ export async function crearRepositorioMemoria(): Promise<Repositorio> {
       asignaciones.get(usuarioId)?.add(cliente.id);
       return cliente;
     },
+    async asignarClienteA(usuarioId, clienteId) {
+      if (!clientes.some((cliente) => cliente.id === clienteId)) return 'CLIENTE_INEXISTENTE';
+      const asignados = asignaciones.get(usuarioId) ?? new Set<string>();
+      asignaciones.set(usuarioId, asignados);
+      if (asignados.has(clienteId)) return 'YA_ASIGNADO';
+      asignados.add(clienteId);
+      return 'ASIGNADO';
+    },
+
     async eliminarClienteDe(usuarioId, clienteId) {
       asignaciones.get(usuarioId)?.delete(clienteId);
       const sigueAsignado = [...asignaciones.values()].some((set) => set.has(clienteId));

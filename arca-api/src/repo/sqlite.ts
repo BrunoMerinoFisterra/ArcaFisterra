@@ -327,6 +327,43 @@ export function crearRepositorioSqlite(opciones: OpcionesSqlite): Repositorio & 
       return aCliente(f);
     },
 
+    async asignarClienteA(usuarioId, clienteId) {
+      // En transacción para que el chequeo de existencia y el alta de la
+      // asignación no se separen: el PRIMARY KEY de arca_user_clientes ya
+      // impide el duplicado, pero así el llamador recibe YA_ASIGNADO en vez de
+      // un error de constraint.
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        const existe = uno<{ id: string }>(
+          'SELECT id FROM arca_clientes WHERE id = ?',
+          clienteId,
+        );
+        if (!existe) {
+          db.exec('COMMIT');
+          return 'CLIENTE_INEXISTENTE';
+        }
+        const yaAsignado = uno<{ cliente_id: string }>(
+          'SELECT cliente_id FROM arca_user_clientes WHERE usuario_id = ? AND cliente_id = ?',
+          usuarioId,
+          clienteId,
+        );
+        if (yaAsignado) {
+          db.exec('COMMIT');
+          return 'YA_ASIGNADO';
+        }
+        correr(
+          'INSERT INTO arca_user_clientes (usuario_id, cliente_id) VALUES (?, ?)',
+          usuarioId,
+          clienteId,
+        );
+        db.exec('COMMIT');
+        return 'ASIGNADO';
+      } catch (error) {
+        db.exec('ROLLBACK');
+        throw error;
+      }
+    },
+
     async eliminarClienteDe(usuarioId, clienteId) {
       db.exec('BEGIN IMMEDIATE');
       try {

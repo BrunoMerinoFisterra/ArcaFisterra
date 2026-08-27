@@ -1,6 +1,7 @@
-import { Fragment, useEffect, useState, type FormEvent } from 'react';
+import { Fragment, useEffect, useMemo, useState, type FormEvent } from 'react';
 import {
   actualizarUsuario,
+  asignarClienteAUsuario,
   crearUsuario,
   listarUsuarios,
   quitarClienteDeUsuario,
@@ -32,6 +33,17 @@ export default function Usuarios() {
       setError(e instanceof Error ? e.message : 'No se pudo actualizar la cuenta.');
     }
   }
+
+  // Catálogo de empresas ya cargadas en el sistema. Sale de las asignaciones
+  // que ya devuelve /usuarios: toda empresa está asignada al menos a quien la
+  // dio de alta, así que la unión las cubre a todas sin pedir nada más.
+  const catalogo = useMemo(() => {
+    const porId = new Map<string, UsuarioGestion['clientes'][number]>();
+    for (const usuario of usuarios ?? []) {
+      for (const cliente of usuario.clientes) porId.set(cliente.id, cliente);
+    }
+    return [...porId.values()].sort((a, b) => a.razonSocial.localeCompare(b.razonSocial));
+  }, [usuarios]);
 
   if (!usuarios && error) return <div className="aviso aviso--error">{error}</div>;
   if (!usuarios) return <p className="vacio">Cargando usuarios…</p>;
@@ -111,10 +123,17 @@ export default function Usuarios() {
                       <td colSpan={5} className="panel-gestion">
                         <PanelUsuario
                           usuario={usuario}
+                          catalogo={catalogo}
                           alGuardar={(cambios) =>
                             ejecutar(
                               () => actualizarUsuario(usuario.id, cambios),
                               `Cuenta de ${usuario.nombre} actualizada.`,
+                            )
+                          }
+                          alAsignarCliente={(cliente) =>
+                            ejecutar(
+                              () => asignarClienteAUsuario(usuario.id, cliente.id),
+                              `${cliente.razonSocial} quedó asignada a ${usuario.nombre}.`,
                             )
                           }
                           alQuitarCliente={(cliente) =>
@@ -215,22 +234,33 @@ function AltaUsuario({
 
 function PanelUsuario({
   usuario,
+  catalogo,
   alGuardar,
+  alAsignarCliente,
   alQuitarCliente,
 }: {
   usuario: UsuarioGestion;
+  catalogo: UsuarioGestion['clientes'];
   alGuardar: (cambios: {
     nombre?: string;
     password?: string;
     limiteClientes?: number;
     activo?: boolean;
   }) => void;
+  alAsignarCliente: (cliente: UsuarioGestion['clientes'][number]) => void;
   alQuitarCliente: (cliente: UsuarioGestion['clientes'][number]) => void;
 }) {
   const [nombre, setNombre] = useState(usuario.nombre);
   const [limite, setLimite] = useState(usuario.limiteClientes ?? 0);
   const [password, setPassword] = useState('');
   const [clienteAConfirmar, setClienteAConfirmar] = useState<string | null>(null);
+  const [aAsignar, setAAsignar] = useState('');
+
+  const disponibles = catalogo.filter(
+    (cliente) => !usuario.clientes.some((asignado) => asignado.id === cliente.id),
+  );
+  const sinCupo =
+    usuario.limiteClientes !== null && usuario.clientesAsignados >= usuario.limiteClientes;
 
   return (
     <div className="gestion gestion--usuario">
@@ -271,9 +301,44 @@ function PanelUsuario({
       <div className="gestion__bloque gestion__bloque--clientes">
         <h3>Empresas asignadas ({usuario.clientes.length})</h3>
         <p className="tenue">
-          Sólo un administrador puede quitar empresas. Esto evita que la cuenta reutilice el cupo
+          Sólo un administrador asigna o quita empresas. Esto evita que la cuenta reutilice el cupo
           rotando clientes.
         </p>
+
+        {sinCupo ? (
+          <p className="aviso aviso--bloqueo">
+            La cuenta ocupa su cupo de {usuario.limiteClientes}. Ampliá el límite o quitale una
+            empresa antes de asignarle otra.
+          </p>
+        ) : (
+          disponibles.length > 0 && (
+            <div className="fila-campos">
+              <label className="campo campo--ancho">
+                <span className="campo__etiqueta">Compartir una empresa ya cargada</span>
+                <select value={aAsignar} onChange={(e) => setAAsignar(e.target.value)}>
+                  <option value="">Elegí una empresa…</option>
+                  {disponibles.map((cliente) => (
+                    <option key={cliente.id} value={cliente.id}>
+                      {cliente.razonSocial} — {cliente.cuit}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button
+                type="button"
+                className="btn btn--primario"
+                disabled={aAsignar === ''}
+                onClick={() => {
+                  const cliente = disponibles.find((candidato) => candidato.id === aAsignar);
+                  if (cliente) alAsignarCliente(cliente);
+                  setAAsignar('');
+                }}
+              >
+                Asignar
+              </button>
+            </div>
+          )
+        )}
         {usuario.clientes.length === 0 ? (
           <p className="vacio">No tiene empresas asignadas.</p>
         ) : (

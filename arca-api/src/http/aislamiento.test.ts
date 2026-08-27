@@ -245,6 +245,61 @@ for (const [motor, crearRepo] of MOTORES) {
       }
     });
 
+    test('el admin asigna un cliente ya cargado a otra cuenta', async () => {
+      const s = await levantar(crearRepo);
+      try {
+        const admin = await s.login('bruno@fisterra.com');
+        const ayudante = await s.login('ayudante@fisterra.com');
+
+        // En la semilla, ayudante (u2) tiene c1 y c2, pero no c3.
+        assert.equal((await s.get('/clientes/c3', ayudante)).status, 404);
+
+        // Un usuario común no puede asignarse clientes a sí mismo.
+        assert.equal((await s.enviar('/usuarios/u2/clientes/c3', 'POST', ayudante)).status, 403);
+
+        assert.equal((await s.enviar('/usuarios/u2/clientes/c3', 'POST', admin)).status, 201);
+
+        // Lo que importa: ahora llega a los datos fiscales, no sólo a la lista.
+        assert.equal((await s.get('/clientes/c3', ayudante)).status, 200);
+
+        // Repetirla no duplica la asignación; avisa que ya estaba.
+        assert.equal((await s.enviar('/usuarios/u2/clientes/c3', 'POST', admin)).status, 409);
+
+        assert.equal((await s.enviar('/usuarios/u2/clientes/no-existe', 'POST', admin)).status, 404);
+        assert.equal((await s.enviar('/usuarios/no-existe/clientes/c3', 'POST', admin)).status, 404);
+
+        // Compartido: quitárselo a una cuenta no se lo quita a la otra.
+        assert.equal((await s.enviar('/usuarios/u2/clientes/c3', 'DELETE', admin)).status, 204);
+        assert.equal((await s.get('/clientes/c3', ayudante)).status, 404);
+        assert.equal((await s.get('/clientes/c3', admin)).status, 200);
+      } finally {
+        await s.cerrar();
+      }
+    });
+
+    test('asignar respeta el cupo, igual que el alta', async () => {
+      const s = await levantar(crearRepo);
+      try {
+        const admin = await s.login('bruno@fisterra.com');
+        const alta = await s.enviar('/usuarios', 'POST', admin, {
+          nombre: 'Cuenta Acotada',
+          email: 'acotada@fisterra.com',
+          password: 'secreto-demo',
+          limiteClientes: 1,
+        });
+        assert.equal(alta.status, 201);
+        const cuenta = (await alta.json()) as { id: string };
+
+        assert.equal((await s.enviar(`/usuarios/${cuenta.id}/clientes/c1`, 'POST', admin)).status, 201);
+
+        // El cupo ya está consumido: sin este chequeo, asignar sería la vía
+        // para saltear el límite que el alta de clientes sí controla.
+        assert.equal((await s.enviar(`/usuarios/${cuenta.id}/clientes/c2`, 'POST', admin)).status, 409);
+      } finally {
+        await s.cerrar();
+      }
+    });
+
     test('el admin crea, limita, pausa y reactiva cuentas de usuario', async () => {
       const s = await levantar(crearRepo);
       try {

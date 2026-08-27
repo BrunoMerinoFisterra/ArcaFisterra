@@ -90,6 +90,46 @@ export function rutasUsuarios(repo: Repositorio, config: Config): Router {
   });
 
   /**
+   * Asigna una empresa YA CARGADA a otra cuenta.
+   *
+   * Sin esta ruta, un cliente dado de alta por alguien queda inaccesible para
+   * el resto para siempre: `POST /clientes` rechaza el CUIT repetido, así que
+   * no existe un segundo camino para llegar al mismo contribuyente.
+   */
+  router.post('/:id/clientes/:clienteId', async (req, res) => {
+    const id = req.params['id'];
+    const clienteId = req.params['clienteId'];
+    if (typeof id !== 'string' || typeof clienteId !== 'string') {
+      throw new ErrorHttp(400, 'La cuenta o el cliente no son válidos.');
+    }
+    const destino = (await repo.listarUsuarios()).find((usuario) => usuario.id === id);
+    if (!destino) throw new ErrorHttp(404, 'No existe ese usuario.');
+
+    // A diferencia de la baja, acá SÍ se admite una cuenta administradora: si
+    // un ayudante dio de alta el cliente, el titular no tiene ningún otro
+    // camino para acceder a él.
+
+    // El cupo se controla también en la asignación. Si sólo lo mirara el alta,
+    // asignar sería exactamente la forma de saltearlo.
+    if (destino.limiteClientes !== null) {
+      const cantidad = await repo.cantidadClientesDe(destino.id);
+      if (cantidad >= destino.limiteClientes) {
+        throw new ErrorHttp(
+          409,
+          `La cuenta tiene ${cantidad} clientes y su cupo es de ${destino.limiteClientes}.`,
+        );
+      }
+    }
+
+    const resultado = await repo.asignarClienteA(destino.id, clienteId);
+    if (resultado === 'CLIENTE_INEXISTENTE') throw new ErrorHttp(404, 'No existe ese cliente.');
+    if (resultado === 'YA_ASIGNADO') {
+      throw new ErrorHttp(409, 'Ese cliente ya está asignado a la cuenta.');
+    }
+    res.status(201).json(await conClientes(destino));
+  });
+
+  /**
    * Desasigna una empresa de una cuenta. Es deliberadamente una ruta de
    * administrador: el titular no puede ciclar clientes para reutilizar cupos.
    */

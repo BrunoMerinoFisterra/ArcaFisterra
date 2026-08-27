@@ -279,6 +279,17 @@ export function actualizarUsuario(
   });
 }
 
+/** Comparte una empresa ya cargada con otra cuenta, sin volver a darla de alta. */
+export function asignarClienteAUsuario(
+  usuarioId: string,
+  clienteId: string,
+): Promise<UsuarioGestion> {
+  return pedir<UsuarioGestion>(
+    `/usuarios/${encodeURIComponent(usuarioId)}/clientes/${encodeURIComponent(clienteId)}`,
+    { method: 'POST' },
+  );
+}
+
 export function quitarClienteDeUsuario(usuarioId: string, clienteId: string): Promise<void> {
   return pedir<void>(
     `/usuarios/${encodeURIComponent(usuarioId)}/clientes/${encodeURIComponent(clienteId)}`,

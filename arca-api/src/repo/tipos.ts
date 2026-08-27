@@ -57,6 +57,9 @@ export interface LecturaLocal {
   leidoAppEn: string | null;
 }
 
+/** Resultado de asignar un cliente ya existente a otra cuenta. */
+export type ResultadoAsignacion = 'ASIGNADO' | 'YA_ASIGNADO' | 'CLIENTE_INEXISTENTE';
+
 /**
  * Contrato de persistencia.
  *
@@ -101,6 +104,18 @@ export interface Repositorio {
    * para las otras cuentas; si era la última asignación, lo elimina completo.
    */
   eliminarClienteDe(usuarioId: string, clienteId: string): Promise<void>;
+
+  /**
+   * Asigna un cliente YA EXISTENTE a otra cuenta. Es la simétrica de
+   * `eliminarClienteDe`, y sin ella un cliente cargado por alguien no se puede
+   * compartir nunca: el alta rechaza el CUIT repetido, así que no hay segundo
+   * camino para llegar al mismo contribuyente.
+   *
+   * Devuelve un resultado en vez de lanzar para que la ruta pueda distinguir
+   * "no existe" de "ya estaba" SIN necesidad de un `obtenerCliente(id)` suelto
+   * — que es justamente lo que esta interfaz evita a propósito.
+   */
+  asignarClienteA(usuarioId: string, clienteId: string): Promise<ResultadoAsignacion>;
 
   /**
    * Guarda la credencial ya cifrada. El repositorio nunca ve la clave en claro:
