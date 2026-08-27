@@ -101,6 +101,17 @@ export function obtenerSesionActual(): Promise<Usuario> {
   return pedir<Usuario>('/sesion/yo');
 }
 
+/** Cambia la contraseña de la cuenta con la que estás dentro, no la de otro. */
+export function cambiarPasswordPropia(
+  passwordActual: string,
+  passwordNueva: string,
+): Promise<void> {
+  return pedir<void>('/sesion/password', {
+    method: 'PATCH',
+    body: JSON.stringify({ passwordActual, passwordNueva }),
+  });
+}
+
 /* --- Tablero --- */
 
 export function listarResumenClientes(): Promise<ResumenCliente[]> {

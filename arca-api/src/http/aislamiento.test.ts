@@ -177,6 +177,74 @@ for (const [motor, crearRepo] of MOTORES) {
       }
     });
 
+    test('cada uno cambia su propia contraseña, incluidos los administradores', async () => {
+      const s = await levantar(crearRepo);
+      const loginCrudo = (email: string, password: string) =>
+        fetch(`${s.base}/sesion/login`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ email, password }),
+        });
+      try {
+        const ayudante = await s.login('ayudante@fisterra.com');
+
+        // Sin la contraseña actual no se cambia: una sesión robada no alcanza
+        // para dejar afuera al dueño de la cuenta.
+        assert.equal(
+          (
+            await s.enviar('/sesion/password', 'PATCH', ayudante, {
+              passwordActual: 'no-es-la-suya',
+              passwordNueva: 'clave-nueva-1',
+            })
+          ).status,
+          403,
+        );
+        assert.equal((await loginCrudo('ayudante@fisterra.com', 'demo')).status, 200);
+
+        assert.equal(
+          (
+            await s.enviar('/sesion/password', 'PATCH', ayudante, {
+              passwordActual: 'demo',
+              passwordNueva: 'clave-nueva-1',
+            })
+          ).status,
+          204,
+        );
+
+        // La nueva sirve; la vieja deja de servir.
+        await s.loginConPassword('ayudante@fisterra.com', 'clave-nueva-1');
+        assert.equal((await loginCrudo('ayudante@fisterra.com', 'demo')).status, 401);
+
+        // Lo que antes era imposible: PATCH /usuarios/:id rechaza las cuentas
+        // admin, así que un administrador no tenía forma de cambiar su clave.
+        const admin = await s.login('bruno@fisterra.com');
+        assert.equal(
+          (
+            await s.enviar('/sesion/password', 'PATCH', admin, {
+              passwordActual: 'demo',
+              passwordNueva: 'clave-nueva-admin',
+            })
+          ).status,
+          204,
+        );
+        await s.loginConPassword('bruno@fisterra.com', 'clave-nueva-admin');
+
+        // Una contraseña corta se rechaza aunque la actual sea correcta.
+        const otro = await s.loginConPassword('ayudante@fisterra.com', 'clave-nueva-1');
+        assert.equal(
+          (
+            await s.enviar('/sesion/password', 'PATCH', otro, {
+              passwordActual: 'clave-nueva-1',
+              passwordNueva: 'corta',
+            })
+          ).status,
+          400,
+        );
+      } finally {
+        await s.cerrar();
+      }
+    });
+
     test('el admin crea, limita, pausa y reactiva cuentas de usuario', async () => {
       const s = await levantar(crearRepo);
       try {

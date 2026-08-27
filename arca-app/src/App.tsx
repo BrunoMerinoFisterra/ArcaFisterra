@@ -3,6 +3,7 @@ import Dashboard from './pages/Dashboard';
 import ClienteDetalle from './pages/ClienteDetalle';
 import Clientes from './pages/Clientes';
 import Login from './pages/Login';
+import MiCuenta from './pages/MiCuenta';
 import Usuarios from './pages/Usuarios';
 import { useAuth } from './auth/AuthContext';
 import { WipeLink } from './components/IrisLink';
@@ -52,6 +53,14 @@ export default function App() {
             element={
               <Protegida soloAdmin>
                 <Usuarios />
+              </Protegida>
+            }
+          />
+          <Route
+            path="/mi-cuenta"
+            element={
+              <Protegida>
+                <MiCuenta />
               </Protegida>
             }
           />
@@ -105,7 +114,9 @@ function Topbar() {
         )}
       </nav>
       <div className="topbar__usuario">
-        {usuario?.nombre}
+        <WipeLink to="/mi-cuenta" direccion="izquierda" className={clase('/mi-cuenta')}>
+          {usuario?.nombre}
+        </WipeLink>
         {esAdmin && <span className="topbar__rol">admin</span>}
         <button className="enlace" onClick={salir}>
           Salir

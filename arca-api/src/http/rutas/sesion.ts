@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import type { Config } from '../../config.js';
-import { verificarPassword } from '../../crypto/password.js';
+import { hashearPassword, verificarPassword } from '../../crypto/password.js';
 import type { Repositorio } from '../../repo/tipos.js';
 import { firmarToken, requiereAuth, usuarioDe } from '../auth.js';
 import { ErrorHttp } from '../errores.js';
@@ -9,6 +9,11 @@ import { ErrorHttp } from '../errores.js';
 const esquemaLogin = z.object({
   email: z.string().email(),
   password: z.string().min(1),
+});
+
+const esquemaCambioPassword = z.object({
+  passwordActual: z.string().min(1),
+  passwordNueva: z.string().min(6).max(200),
 });
 
 /** Ventana y tope de intentos fallidos por email. */
@@ -78,6 +83,42 @@ export function rutasSesion(repo: Repositorio, config: Config): Router {
 
   router.get('/yo', requiereAuth(config.jwtSecret, repo), (req, res) => {
     res.json(usuarioDe(req));
+  });
+
+  /**
+   * Cambio de la contraseña PROPIA.
+   *
+   * Vive acá y no en /usuarios porque no es administrar cuentas ajenas: la
+   * cambia cada uno para sí, incluidos los administradores — que hasta ahora no
+   * tenían ningún camino, porque `PATCH /usuarios/:id` rechaza las cuentas
+   * admin y no hay otra ruta que toque contraseñas.
+   *
+   * Exige la contraseña actual. Sin eso, una sesión prestada o robada alcanza
+   * para cambiar la clave y dejar afuera al dueño de la cuenta.
+   */
+  router.patch('/password', requiereAuth(config.jwtSecret, repo), async (req, res) => {
+    const usuario = usuarioDe(req);
+    const parseo = esquemaCambioPassword.safeParse(req.body);
+    if (!parseo.success) {
+      throw new ErrorHttp(400, 'La contraseña nueva tiene que tener al menos 6 caracteres.');
+    }
+
+    // El hash sale de la base, no del token: el JWT prueba identidad, no clave.
+    const actual = await repo.buscarUsuarioPorId(usuario.id);
+    if (!actual) throw new ErrorHttp(401, 'La sesión ya no es válida.');
+
+    if (!(await verificarPassword(parseo.data.passwordActual, actual.passwordHash))) {
+      throw new ErrorHttp(403, 'La contraseña actual no es correcta.');
+    }
+    if (parseo.data.passwordNueva === parseo.data.passwordActual) {
+      throw new ErrorHttp(400, 'La contraseña nueva tiene que ser distinta de la actual.');
+    }
+
+    const passwordHash = await hashearPassword(parseo.data.passwordNueva);
+    if (!(await repo.actualizarUsuario(usuario.id, { passwordHash }))) {
+      throw new ErrorHttp(404, 'No existe la cuenta.');
+    }
+    res.status(204).end();
   });
 
   return router;
