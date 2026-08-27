@@ -1,9 +1,14 @@
 import { useState, type FormEvent } from 'react';
 import { useAuth } from '../auth/AuthContext';
+
 /**
- * Usuarios que siembra `arca-api` en su repositorio de memoria.
- * Es sólo la ayuda visual: quien valida es la API.
+ * Atajo para los usuarios que siembra `arca-api` con SEMBRAR_DEMO=1.
+ *
+ * Sólo en desarrollo (`import.meta.env.DEV`): en un build servido en la red del
+ * estudio, esta lista publica direcciones de acceso válidas a cualquiera que
+ * abra la pantalla, que es justo la mitad del trabajo de quien quiera entrar.
  */
+const MOSTRAR_ATAJO_DEMO = import.meta.env.DEV;
 const PASSWORD_DEMO = 'demo';
 const USUARIOS = [
   { id: 'u1', email: 'bruno@fisterra.com', rol: 'admin' },
@@ -71,24 +76,21 @@ export default function Login() {
           {enviando ? 'Entrando…' : 'Entrar'}
         </button>
 
-        {/*
-          Las credenciales de demo se muestran a proposito: esto es un mock sin
-          backend, y esconderlas solo lograria que nadie pueda entrar. Este
-          bloque desaparece junto con los mocks.
-        */}
-        <div className="login__demo">
-          <strong>Demo</strong> — contraseña <code>{PASSWORD_DEMO}</code> para cualquiera de:
-          <ul>
-            {USUARIOS.map((u) => (
-              <li key={u.id}>
-                <button type="button" className="enlace" onClick={() => setEmail(u.email)}>
-                  {u.email}
-                </button>{' '}
-                <span className="tenue">({u.rol})</span>
-              </li>
-            ))}
-          </ul>
-        </div>
+        {MOSTRAR_ATAJO_DEMO && (
+          <div className="login__demo">
+            <strong>Demo</strong> — contraseña <code>{PASSWORD_DEMO}</code> para cualquiera de:
+            <ul>
+              {USUARIOS.map((u) => (
+                <li key={u.id}>
+                  <button type="button" className="enlace" onClick={() => setEmail(u.email)}>
+                    {u.email}
+                  </button>{' '}
+                  <span className="tenue">({u.rol})</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
       </form>
     </div>
   );

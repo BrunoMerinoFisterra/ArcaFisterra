@@ -56,7 +56,11 @@ async function pedirRespuesta(ruta: string, opciones: RequestInit = {}): Promise
     },
   });
 
-  if (res.status === 401) {
+  // /sesion/login no exige sesión previa: un 401 ahí es "contraseña
+  // incorrecta", no "tu sesión venció". Tratarlo igual que el resto de los
+  // 401 mostraba un mensaje que no tenía nada que ver, y empujaba a
+  // reintentar en vez de corregir la contraseña.
+  if (res.status === 401 && ruta !== '/sesion/login') {
     // El token venció o es inválido. Limpiar y volver al login: dejar la
     // pantalla con datos viejos haría creer que la sesión sigue viva.
     borrarToken();
