@@ -6,7 +6,18 @@ services:
       args:
         VITE_API_URL: /api
     environment:
-      SITE_ADDRESS: ${SITE_ADDRESS:-:80}
+      # Sin default a propósito. Con `:-:80` un olvido del --env-file hacía que
+      # Caddy sirviera HTTP puro sin avisar: un problema de seguridad que falla
+      # ABIERTO. Con `:?` Compose corta con este mensaje antes de levantar nada.
+      SITE_ADDRESS: "${SITE_ADDRESS:?falta SITE_ADDRESS, agregá --env-file .env.production al comando}"
+      # El Caddyfile es el mismo que usa el despliegue con systemd; estas dos
+      # pisan sus defaults de VM pelada (localhost:3001 y el dist en disco) por
+      # los valores que corresponden dentro de la red del compose.
+      API_HOST: api
+      WEB_ROOT: /srv
+      # Vacío = Let's Encrypt (necesita dominio público). En LAN, poner
+      # CADDY_TLS="tls internal" en .env.production.
+      CADDY_TLS: ${CADDY_TLS:-}
     ports:
       - "80:80"
       - "443:443"
@@ -58,6 +69,40 @@ services:
       - worker_artifacts:/app/arca-worker/.artifacts
     shm_size: 1gb
     init: true
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Respaldo de la base y poda de artifacts. Reutiliza la imagen de la API
+  # (tiene node y node:sqlite) con otro comando.
+  #
+  # Los respaldos van a ./respaldos del host y NO a un volumen de Docker: así
+  # los ves desde Windows y los podés copiar afuera de la máquina. Un respaldo
+  # que vive en el mismo disco que la base no te cubre si se pierde el equipo.
+  mantenimiento:
+    build:
+      context: .
+      dockerfile: deploy/api.Dockerfile
+    environment:
+      ARCA_DB: /data/arca.db
+      ARCA_RESPALDOS: /respaldos
+      ARCA_ARTIFACTS: /artifacts
+      RETENCION_DIAS: 14
+      RETENCION_ARTIFACTS_DIAS: 7
+    volumes:
+      - arca_data:/data
+      - worker_artifacts:/artifacts
+      - ./respaldos:/respaldos
+    # Corre al arrancar y después cada 24 h. Sin cron ni planificador del host:
+    # si la máquina se reinicia, el primer respaldo sale con el arranque.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        while true; do
+          node mantenimiento.mjs || echo "mantenimiento: fallo esta corrida"
+          sleep 86400
+        done
     depends_on:
       api:
         condition: service_healthy

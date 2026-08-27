@@ -20,6 +20,15 @@
 .run/
 .run-logs/
 
+# Respaldos de la base que deja el servicio de mantenimiento. Son la base
+# entera: datos fiscales y credenciales cifradas.
+/respaldos/
+
+# Certificado raiz de la CA local de Caddy. No es secreto (la clave privada
+# queda en el volumen caddy_data), pero es propio de CADA instalacion: si se
+# versiona, cada clon se lleva la CA de otra maquina.
+/deploy/certificados/
+
 # Config local de Claude Code (permisos de esta maquina/sesion). No es un
 # secreto, pero es de esta maquina — no del proyecto.
 .claude/settings.local.json

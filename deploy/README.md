@@ -102,14 +102,12 @@ problema. Por eso el `Caddyfile` usa `handle_path` y no `handle`: le saca el
 prefijo `/api` antes de reenviar, porque las rutas de Express son `/clientes` y
 `/sesion`.
 
-Ajustá el dominio en el `Caddyfile` y copialo:
+Ajustá el default de `panel.fisterra.com.ar` por tu dominio real dentro del
+`Caddyfile` (primera linea del bloque, es `{$SITE_ADDRESS:tu-dominio}`) y
+copialo:
 
 ```bash
 sudo cp deploy/Caddyfile /etc/caddy/Caddyfile
-```
-
-```bash
-sudo mkdir -p /var/log/caddy && sudo chown caddy:caddy /var/log/caddy
 ```
 
 ```bash
@@ -125,12 +123,64 @@ cubre las cabeceras que la API no pone porque no usa helmet, sin tocar Express.
 Revisá la consola del navegador despues del primer deploy — si no hay
 violaciones de CSP, sacá `'unsafe-inline'` de `style-src`.
 
+Los logs de acceso van a stdout, no a un archivo: `journalctl -u caddy -f`.
+
 Al ser una herramienta interna, considerá dejarla sin exponer del todo:
 Tailscale o un allowlist de IPs en Caddy suman una capa por encima del JWT.
+
+### TLS en una red local (sin dominio público)
+
+En la LAN de un estudio no hay dominio público, así que Let's Encrypt no puede
+validar nada. Para eso está `CADDY_TLS`:
+
+```dotenv
+SITE_ADDRESS=nombre-del-equipo.local
+PUBLIC_ORIGIN=https://nombre-del-equipo.local
+CADDY_TLS=tls internal
+```
+
+Caddy levanta una CA local, firma el certificado él mismo y redirige HTTP a
+HTTPS. Sin esto, el JWT y los datos fiscales viajan en texto plano por la red de
+la oficina.
+
+**Usá un NOMBRE, no la IP.** Con una IP el handshake TLS falla: el cliente no
+puede enviar SNI para una dirección IP (no lo permite el RFC), así que Caddy no
+sabe qué certificado presentar y corta la conexión. El nombre del equipo con
+sufijo `.local` lo resuelven las máquinas Windows de la red sin configurar nada.
+
+El certificado raíz hay que instalarlo **una vez en cada máquina** del estudio,
+si no el navegador muestra la advertencia de sitio no confiable. Extraerlo:
+
+```bash
+docker compose --env-file .env.production -f compose.production.yml exec -T web cat /data/caddy/pki/authorities/local/root.crt > arcapanel-ca.crt
+```
+
+En Windows: doble clic sobre el `.crt` → Instalar certificado → Equipo local →
+Colocar todos los certificados en **Entidades de certificación raíz de
+confianza**. La CA persiste en el volumen `caddy_data`, así que sobrevive a los
+reinicios y no hay que reinstalarla en cada actualización.
+
+### El mismo `Caddyfile` sirve para Docker Compose
+
+`compose.production.yml` construye Caddy con `deploy/web.Dockerfile`, que
+copia este mismo archivo a la imagen. Ahi la API no esta en `localhost` sino
+en otro contenedor, y el build del front queda en `/srv` en vez del disco de
+la VM — por eso el `Caddyfile` resuelve esos dos valores por variable de
+entorno (`API_HOST`, `WEB_ROOT`), y el servicio `web` del compose ya las
+setea. `SITE_ADDRESS` se define en `.env.production` (copiado de
+`.env.production.example`) para los dos despliegues por igual.
+
+Sin ninguna de esas variables seteadas —el caso de systemd, arriba— el archivo
+se comporta exactamente como antes.
 
 ## Mantenimiento
 
 Respaldo de la base y poda de artifacts, todas las noches:
+
+> **En Docker Compose el mantenimiento ya viene incluido** como servicio: corre
+> al arrancar y cada 24 h, y deja los respaldos en `./respaldos` del host —
+> visibles desde el Explorador, para poder copiarlos afuera de la máquina. Lo
+> que sigue es sólo para el despliegue con systemd.
 
 ```bash
 sudo cp deploy/systemd/arca-mantenimiento.* /etc/systemd/system/

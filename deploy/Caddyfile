@@ -1,28 +1,61 @@
 # Caddy sirve el front estatico, termina TLS y hace de reverse proxy a la API.
 #
-# Cambia panel.fisterra.com.ar por tu dominio real. Caddy pide el certificado a
-# Let's Encrypt en el primer arranque y lo renueva solo: no hace falta certbot
-# ni un cron de renovacion.
+# Un solo Caddyfile sirve DOS despliegues (ver deploy/README.md):
+#   - systemd en una VM pelada: Caddy y la API en el mismo host, sin Docker.
+#   - Docker Compose (compose.production.yml): Caddy, API y worker en
+#     contenedores separados sobre la red del compose.
+# Lo que cambia entre uno y otro —el destino de la API y la carpeta del front—
+# se resuelve con variables de entorno con default: sin nada seteado, este
+# archivo se comporta EXACTAMENTE como antes (systemd, localhost:3001). El
+# `web` service de compose.production.yml pisa esos defaults.
 #
-# Requisito: el registro DNS tiene que apuntar a la VM ANTES de arrancar Caddy,
-# porque la validacion es por HTTP y necesita resolver el dominio.
+# Cambia el default de SITE_ADDRESS por tu dominio real, o seteá la variable
+# de entorno SITE_ADDRESS (asi lo hace .env.production.example). Caddy pide el
+# certificado a Let's Encrypt en el primer arranque y lo renueva solo: no hace
+# falta certbot ni un cron de renovacion.
+#
+# Requisito, solo si usas un dominio real (no aplica a direcciones sin host
+# como ":80", que Caddy sirve sin TLS): el registro DNS tiene que apuntar a la
+# VM ANTES de arrancar Caddy, porque la validacion es por HTTP.
 
-panel.fisterra.com.ar {
+{$SITE_ADDRESS:panel.fisterra.com.ar} {
 	encode zstd gzip
+
+	# Modo de certificado. Vacío por defecto = Let's Encrypt automático, que es
+	# lo correcto con un dominio público (despliegue systemd).
+	#
+	# En una LAN no hay dominio público, así que Let's Encrypt no puede validar
+	# nada. Ahí se setea CADDY_TLS="tls internal": Caddy levanta una CA local y
+	# firma el certificado él mismo. Hay que instalar su certificado raíz una
+	# vez en cada máquina del estudio (ver deploy/README.md).
+	#
+	# Funciona porque el Caddyfile sustituye las variables ANTES de parsear, así
+	# que esto puede expandirse a una directiva entera o a nada.
+	{$CADDY_TLS:}
 
 	# --- API ---------------------------------------------------------------
 	# handle_path (y no handle) SACA el prefijo /api antes de reenviar: las
 	# rutas de Express son /clientes y /sesion, no /api/clientes.
 	#
-	# La API escucha en localhost y nunca se expone directo a internet: el
-	# unico que le habla es este proxy.
+	# Host y puerto van en DOS placeholders, no uno solo con "host:puerto"
+	# adentro: el Caddyfile usa ":" como separador entre el nombre de la
+	# variable y su default, y no esta documentado que un default pueda llevar
+	# otro ":" adentro. Separarlos evita ese parseo ambiguo.
+	#
+	# systemd (default): la API escucha en localhost y nunca se expone directo
+	# a internet, el unico que le habla es este proxy.
+	# Docker Compose: API_HOST=api la resuelve por el nombre del servicio en la
+	# red del compose — "localhost" ahi apuntaria al propio contenedor de Caddy.
 	handle_path /api/* {
-		reverse_proxy localhost:3001
+		reverse_proxy {$API_HOST:localhost}:{$API_PORT:3001}
 	}
 
 	# --- Front -------------------------------------------------------------
 	handle {
-		root * /opt/arcapanel/arca-app/dist
+		# systemd (default): el build del front vive junto al resto de la app.
+		# Docker Compose: WEB_ROOT=/srv, donde web.Dockerfile copia el build
+		# dentro de la imagen de Caddy.
+		root * {$WEB_ROOT:/opt/arcapanel/arca-app/dist}
 
 		# react-router resuelve /clientes y /cliente/:id en el navegador; en el
 		# servidor esos archivos no existen. Sin esta linea, recargar con F5
@@ -54,10 +87,12 @@ panel.fisterra.com.ar {
 		-Server
 	}
 
+	# stdout y no un archivo: en Docker /var/log/caddy no existe ni esta en
+	# ningun volumen del compose, asi que un log a archivo se pierde en cada
+	# recreacion del contenedor (o ni arranca, si Caddy no puede crear la
+	# carpeta). stdout funciona igual en los dos despliegues: systemd lo manda
+	# a journalctl -u caddy, Docker lo captura con `docker compose logs web`.
 	log {
-		output file /var/log/caddy/arcapanel.log {
-			roll_size 10MiB
-			roll_keep 5
-		}
+		output stdout
 	}
 }
