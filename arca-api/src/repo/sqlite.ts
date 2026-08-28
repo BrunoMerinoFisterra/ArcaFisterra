@@ -230,6 +230,44 @@ export function crearRepositorioSqlite(opciones: OpcionesSqlite): Repositorio & 
       return uno('SELECT 1 AS x FROM arca_users WHERE lower(email) = lower(?)', email) !== null;
     },
 
+    async crearAdminInicial(datos) {
+      // BEGIN IMMEDIATE y no dos consultas sueltas: el chequeo de "no hay
+      // usuarios" y el alta tienen que ser indivisibles. Con la API y N workers
+      // sobre el mismo archivo, dos arranques simultáneos podrían ver la tabla
+      // vacía los dos y crear dos administradores.
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        const hay = uno<{ n: number }>('SELECT COUNT(*) AS n FROM arca_users');
+        if (!hay || hay.n > 0) {
+          db.exec('COMMIT');
+          return null;
+        }
+        const id = randomUUID();
+        correr(
+          `INSERT INTO arca_users
+             (id, email, nombre, rol, password_hash, activo, limite_clientes)
+           VALUES (?, ?, ?, 'admin', ?, 1, NULL)`,
+          id,
+          datos.email,
+          datos.nombre,
+          datos.passwordHash,
+        );
+        db.exec('COMMIT');
+        return {
+          id,
+          email: datos.email,
+          nombre: datos.nombre,
+          rol: 'admin',
+          activo: true,
+          limiteClientes: null,
+          clientesAsignados: 0,
+        };
+      } catch (error) {
+        db.exec('ROLLBACK');
+        throw error;
+      }
+    },
+
     async crearUsuario(datos) {
       const id = randomUUID();
       correr(

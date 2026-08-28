@@ -1,3 +1,4 @@
+import { crearAdminInicialSiHaceFalta } from './admin-inicial.js';
 import { cargarConfig } from './config.js';
 import { crearApp } from './http/app.js';
 import { crearRepositorioMemoria } from './repo/memoria.js';
@@ -10,6 +11,8 @@ const repo: Repositorio =
   config.repositorio === 'sqlite'
     ? crearRepositorioSqlite({ archivo: config.sqlitePath, sembrar: config.sembrarDemo })
     : await crearRepositorioMemoria();
+
+await crearAdminInicialSiHaceFalta(repo, config);
 
 crearApp(repo, config).listen(config.puerto, () => {
   console.log(`arca-api escuchando en http://localhost:${config.puerto}`);

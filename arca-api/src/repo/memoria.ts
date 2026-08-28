@@ -292,6 +292,30 @@ export async function crearRepositorioMemoria(): Promise<Repositorio> {
     async existeEmailUsuario(email) {
       return usuarios.some((u) => u.email.toLowerCase() === email.toLowerCase());
     },
+    async crearAdminInicial(datos) {
+      if (usuarios.length > 0) return null;
+      const usuario: UsuarioConHash = {
+        id: randomUUID(),
+        email: datos.email,
+        nombre: datos.nombre,
+        rol: 'admin',
+        activo: true,
+        limiteClientes: null,
+        passwordHash: datos.passwordHash,
+      };
+      usuarios.push(usuario);
+      asignaciones.set(usuario.id, new Set());
+      return {
+        id: usuario.id,
+        email: usuario.email,
+        nombre: usuario.nombre,
+        rol: usuario.rol,
+        activo: usuario.activo,
+        limiteClientes: usuario.limiteClientes,
+        clientesAsignados: 0,
+      };
+    },
+
     async crearUsuario(datos) {
       const usuario: UsuarioConHash = {
         id: randomUUID(),

@@ -83,6 +83,26 @@ export interface Repositorio {
     passwordHash: string;
     limiteClientes: number;
   }): Promise<UsuarioGestion>;
+
+  /**
+   * Crea la PRIMERA cuenta administradora, y sólo si no existe ningún usuario.
+   *
+   * Hace falta porque `crearUsuario` fuerza el rol `user`: por HTTP no hay
+   * —ni debe haber— forma de fabricar un admin. Sin este método una instalación
+   * con SEMBRAR_DEMO=0 arranca con la tabla vacía y no puede entrar nadie
+   * nunca, porque para crear el primer usuario hay que estar logueado como
+   * admin.
+   *
+   * Devuelve null si ya hay cualquier usuario. Esa condición se evalúa DENTRO
+   * de la misma transacción que el alta, no antes: si pudiera correr contra una
+   * base ya poblada, la variable de entorno que lo dispara sería una puerta
+   * trasera para agregarse un admin a un sistema en uso.
+   */
+  crearAdminInicial(datos: {
+    email: string;
+    nombre: string;
+    passwordHash: string;
+  }): Promise<UsuarioGestion | null>;
   actualizarUsuario(
     usuarioId: string,
     cambios: {

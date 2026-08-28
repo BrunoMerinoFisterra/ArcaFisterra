@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { describe, test } from 'node:test';
 import type { Config } from '../config.js';
 import { validarCuit } from '../dominio/cuit.js';
+import { hashearPassword } from '../crypto/password.js';
 import { crearRepositorioMemoria } from '../repo/memoria.js';
 import { crearRepositorioSqlite } from '../repo/sqlite.js';
 import type { Repositorio } from '../repo/tipos.js';
@@ -25,6 +26,7 @@ import { crearApp } from './app.js';
 
 const config: Config = {
   puerto: 0,
+  adminInicial: null,
   origenPermitido: '*',
   jwtSecret: randomBytes(48).toString('base64'),
   claveMaestra: randomBytes(32),
@@ -295,6 +297,30 @@ for (const [motor, crearRepo] of MOTORES) {
         // El cupo ya está consumido: sin este chequeo, asignar sería la vía
         // para saltear el límite que el alta de clientes sí controla.
         assert.equal((await s.enviar(`/usuarios/${cuenta.id}/clientes/c2`, 'POST', admin)).status, 409);
+      } finally {
+        await s.cerrar();
+      }
+    });
+
+    test('no crea un admin inicial si la base ya tiene usuarios', async () => {
+      const s = await levantar(crearRepo);
+      try {
+        // La semilla ya trae u1 (admin) y u2. Con la base poblada las variables
+        // de entorno no pueden fabricar un administrador: si pudieran, serían
+        // una puerta trasera para agregarse un admin a un sistema en uso.
+        assert.equal(
+          await s.repo.crearAdminInicial({
+            email: 'intruso@fisterra.com',
+            nombre: 'Intruso',
+            passwordHash: await hashearPassword('la-que-quiera'),
+          }),
+          null,
+        );
+
+        // Ni creó la cuenta nueva, ni tocó las que ya estaban.
+        const emails = (await s.repo.listarUsuarios()).map((usuario) => usuario.email);
+        assert.ok(!emails.includes('intruso@fisterra.com'));
+        await s.login('bruno@fisterra.com');
       } finally {
         await s.cerrar();
       }
@@ -930,3 +956,45 @@ for (const [motor, crearRepo] of MOTORES) {
     });
   });
 }
+
+describe('admin inicial sobre una base vacía', () => {
+  const vacia = async () => crearRepositorioSqlite({ archivo: ':memory:', sembrar: false });
+
+  test('crea el primer administrador y con eso ya se puede entrar', async () => {
+    const s = await levantar(vacia);
+    try {
+      // El arranque en frío de una instalación real: SEMBRAR_DEMO=0 deja la
+      // tabla vacía, y POST /usuarios exige ser admin. Sin esto no entra nadie.
+      assert.equal((await s.repo.listarUsuarios()).length, 0);
+
+      const creado = await s.repo.crearAdminInicial({
+        email: 'titular@estudio.com',
+        nombre: 'Titular',
+        passwordHash: await hashearPassword('la-clave-del-env'),
+      });
+      if (!creado) throw new Error('no creó el admin inicial');
+      assert.equal(creado.rol, 'admin');
+      assert.equal(creado.limiteClientes, null);
+
+      // Entra, y entra COMO ADMIN: llega a la gestión de usuarios.
+      const token = await s.loginConPassword('titular@estudio.com', 'la-clave-del-env');
+      assert.equal((await s.get('/usuarios', token)).status, 200);
+
+      // Un segundo arranque con las variables todavía puestas no duplica la
+      // cuenta ni le pisa la contraseña. Es el caso real: el .env del servidor
+      // las conserva para siempre y el servicio reinicia solo.
+      assert.equal(
+        await s.repo.crearAdminInicial({
+          email: 'otro@estudio.com',
+          nombre: 'Otro',
+          passwordHash: await hashearPassword('otra-clave'),
+        }),
+        null,
+      );
+      assert.equal((await s.repo.listarUsuarios()).length, 1);
+      await s.loginConPassword('titular@estudio.com', 'la-clave-del-env');
+    } finally {
+      await s.cerrar();
+    }
+  });
+});

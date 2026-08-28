@@ -33,6 +33,39 @@ export interface Config {
   sqlitePath: string;
   sembrarDemo: boolean;
   produccion: boolean;
+  /**
+   * Cuenta administradora a crear en el arranque, si la base no tiene ningún
+   * usuario todavía. null cuando no se configuró.
+   */
+  adminInicial: { email: string; nombre: string; password: string } | null;
+}
+
+/** El mismo minimo que exige el alta de usuarios por HTTP. */
+const LARGO_MINIMO_PASSWORD = 6;
+
+/**
+ * Admin del primer arranque, leido del entorno.
+ *
+ * Se valida aca, al levantar, y no cuando se usa: una contrasena corta o un
+ * email vacio tienen que frenar el proceso, no descubrirse recien cuando
+ * alguien intenta entrar y no puede.
+ */
+function leerAdminInicial(): Config['adminInicial'] {
+  const email = process.env['ADMIN_INICIAL_EMAIL']?.trim();
+  const password = process.env['ADMIN_INICIAL_PASSWORD'] ?? '';
+  if (!email) return null;
+
+  if (password.length < LARGO_MINIMO_PASSWORD) {
+    throw new Error(
+      `ADMIN_INICIAL_EMAIL está seteado pero ADMIN_INICIAL_PASSWORD tiene ${password.length} ` +
+        `caracteres (mínimo ${LARGO_MINIMO_PASSWORD}). Completá la contraseña o sacá las dos variables.`,
+    );
+  }
+  return {
+    email,
+    nombre: process.env['ADMIN_INICIAL_NOMBRE']?.trim() || 'Administrador',
+    password,
+  };
 }
 
 export function cargarConfig(): Config {
@@ -55,6 +88,7 @@ export function cargarConfig(): Config {
   }
 
   return {
+    adminInicial: leerAdminInicial(),
     puerto: Number(process.env['PORT'] ?? 3001),
     origenPermitido: process.env['ORIGEN_PERMITIDO'] ?? 'http://localhost:5173',
     jwtSecret,

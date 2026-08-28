@@ -173,6 +173,39 @@ setea. `SITE_ADDRESS` se define en `.env.production` (copiado de
 Sin ninguna de esas variables seteadas —el caso de systemd, arriba— el archivo
 se comporta exactamente como antes.
 
+## El primer ingreso
+
+En produccion `SEMBRAR_DEMO=0`, asi que la base arranca **sin ningun usuario**.
+Y `POST /usuarios` esta detras de `requiereAdmin`, con lo cual crear el primero
+por HTTP es imposible: para crear un admin hay que ser admin.
+
+Eso lo resuelven tres variables de `.env.production`:
+
+```dotenv
+ADMIN_INICIAL_EMAIL=titular@estudio.com
+ADMIN_INICIAL_PASSWORD=una-clave-larga
+ADMIN_INICIAL_NOMBRE=Titular
+```
+
+Al levantar la API, si —y solo si— la tabla de usuarios esta vacia, crea esa
+cuenta con rol `admin` y sin limite de clientes. El log del arranque lo dice:
+
+```bash
+docker compose --env-file .env.production -f compose.production.yml logs api | grep "admin inicial"
+```
+
+**Cambia esa contrasena desde Mi Cuenta apenas entres.** Mientras no lo hagas,
+la clave de la cuenta con mas privilegios del sistema esta en texto plano en un
+archivo del servidor.
+
+Las variables pueden quedarse puestas: con la base ya poblada el arranque no
+hace nada. No recrean la cuenta, no le pisan la contrasena si la cambiaste, y
+no sirven para agregarse un admin mas adelante — la condicion "no hay ningun
+usuario" se evalua dentro de la misma transaccion que el alta.
+
+Si perdiste el acceso a la unica cuenta admin, estas variables **no** son la
+salida: hay que tocar la base. Es a proposito.
+
 ## Mantenimiento
 
 Respaldo de la base y poda de artifacts, todas las noches:
