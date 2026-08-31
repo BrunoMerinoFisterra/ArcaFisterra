@@ -1,9 +1,157 @@
-# Despliegue en una VM Linux
+# Despliegue
 
-Unidades systemd para correr la API y **N workers** en un solo host. Es la
-opcion A: los tres procesos comparten el archivo SQLite, asi que todos tienen
-que estar en la misma maquina. Repartirlos entre varias VMs requiere primero
+Dos caminos para el mismo resultado — API, N workers y Caddy en **un solo
+host**. Los tres procesos comparten el archivo SQLite, asi que tienen que estar
+en la misma maquina; repartirlos entre varios hosts requiere primero
 `repo/mssql.ts`.
+
+- **[Servidor nuevo con Docker Compose](#servidor-nuevo-desde-github)** — el
+  camino habitual: clonar de GitHub y levantar. Sirve igual en Windows y Linux.
+- **Unidades systemd** (el resto de este documento) — Node y Chromium
+  instalados directo en el sistema, sin Docker. Para una VM Linux dedicada.
+
+---
+
+# Servidor nuevo desde GitHub
+
+El procedimiento a repetir cada vez que se instala en un estudio.
+
+## Lo que git NO se lleva
+
+Todo esto esta en `.gitignore` a proposito. El clon no lo trae y hay que
+resolverlo en el servidor:
+
+| Que | Que hacer |
+|---|---|
+| `.env.production` | Crearlo desde `.env.production.example` |
+| La base de datos | Arranca vacia (o se migra, ver abajo) |
+| `deploy/certificados/` | Ese servidor genera **su propia** CA |
+| `.sessions/`, `.artifacts/`, `respaldos/` | Se crean solos al correr |
+
+## La decision que define todo: la clave maestra
+
+Antes de crear el `.env.production` hay que elegir, y conviene hacerlo a
+conciencia:
+
+**Empezar de cero.** Generar `JWT_SECRET` y `MASTER_KEY` nuevos, y volver a
+cargar los clientes con sus claves fiscales. Es el camino limpio.
+
+**Migrar una instalacion existente.** Copiar el `.db` **y** la `MASTER_KEY` que
+lo cifro — juntos, del mismo origen.
+
+> **La base y la maestra son un par.** Una base con otra maestra da credenciales
+> que no se pueden descifrar. Y el error **no aparece al arrancar**: aparece
+> recien cuando el worker intenta loguear en ARCA y falla con "No se pudo
+> descifrar la credencial". Es de los problemas que se descubren tarde y
+> confunden, porque todo lo demas funciona.
+
+## Pasos
+
+```bash
+git clone https://github.com/BrunoMerinoFisterra/ArcaFisterra.git
+```
+
+```bash
+cp .env.production.example .env.production
+```
+
+Generar los dos secretos:
+
+```bash
+node -e "console.log(require('crypto').randomBytes(48).toString('base64'))"
+```
+
+```bash
+node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+```
+
+Y completar `.env.production` con los valores **de ese servidor**, que no se
+copian de otra instalacion:
+
+```dotenv
+SITE_ADDRESS=nombre-de-ese-servidor.local
+PUBLIC_ORIGIN=https://nombre-de-ese-servidor.local
+CADDY_TLS=tls internal
+
+JWT_SECRET=<el generado recien>
+MASTER_KEY=<el generado recien>
+
+# Sin esto la base nueva queda sin ningun usuario y no puede entrar nadie.
+ADMIN_INICIAL_EMAIL=titular@estudio.com
+ADMIN_INICIAL_PASSWORD=una-clave-larga
+
+# La plantilla la trae apagada.
+SYNC_NOCTURNA=1
+```
+
+Levantar:
+
+```bash
+docker compose --env-file .env.production -f compose.production.yml up --build -d
+```
+
+> **El `--env-file` no es opcional.** Sin el, Compose corta con un mensaje
+> pidiendolo. Es deliberado: antes caia a un default que servia HTTP plano sin
+> avisar — un problema de seguridad que fallaba abierto.
+
+## Certificado en las maquinas del estudio
+
+Cada servidor genera **su propia** CA. El certificado de otra instalacion no
+sirve. Extraer el de este:
+
+```bash
+docker compose --env-file .env.production -f compose.production.yml exec -T web cat /data/caddy/pki/authorities/local/root.crt > arcapanel-ca.crt
+```
+
+Instalarlo una vez por PC: doble clic → Instalar certificado → **Equipo local**
+→ Entidades de certificacion raiz de confianza. Sin eso el navegador rechaza el
+sitio y no hay forma de entrar.
+
+## Arranque automatico
+
+Que el servidor este encendido 24/7 **no alcanza**: lo que decide es que
+supervisa los contenedores despues de un reinicio.
+
+**Linux con Docker Engine** — systemd los levanta al bootear, sin sesion
+iniciada. No hay nada que hacer.
+
+**Windows con Docker Desktop** — Docker Desktop arranca desde el `Run` del
+usuario, no como servicio del sistema. Sin sesion iniciada no hay contenedores,
+este la maquina prendida o no. Lo resuelve **inicio de sesion automatico de
+Windows + bloqueo inmediato de pantalla**: la sesion queda activa (los
+contenedores corren) pero la pantalla bloqueada.
+
+Dos recaudos si se configura: usar una **cuenta local dedicada**, no la
+personal, y que el bloqueo sea inmediato al iniciar sesion.
+
+Un escritorio remoto para levantarlo a mano es un plan B razonable, pero no
+reemplaza esto: si el servidor se reinicia a las 3 de la madrugada, la
+sincronizacion nocturna de esa noche no corre y nadie se entera hasta la
+manana.
+
+## Actualizar
+
+```bash
+git pull
+```
+
+```bash
+docker compose --env-file .env.production -f compose.production.yml up --build -d
+```
+
+La base **no se toca**: vive en un volumen aparte y sobrevive a la
+reconstruccion. Las migraciones de esquema corren solas al abrirla.
+
+Los contenedores se reinician, asi que si hay una sincronizacion en curso se
+corta. El lease vencido la recupera sola, pero conviene mirar que no haya un
+job activo antes de actualizar.
+
+---
+
+# Despliegue con systemd en una VM Linux
+
+Unidades systemd para correr la API y **N workers** en un solo host, con Node y
+Chromium instalados directo en el sistema.
 
 ## Cuantos workers conviene levantar
 
