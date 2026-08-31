@@ -251,3 +251,37 @@ está escrito para que esas piezas entren después sin rediseño —
 `tomarProximoJob` en `sqlite.ts` ya trae en un comentario el `UPDATE TOP(1)
 ... WITH (READPAST, UPDLOCK)` equivalente en T-SQL—; no introducir
 dependencias que lo compliquen.
+
+## Modo orquestador (autorizado por defecto)
+
+En este repositorio Claude trabaja **delegando por defecto**: no hace falta
+pedírselo turno a turno. El hilo principal decide, delega y sintetiza; el
+trabajo pesado de lectura y escritura va en subagentes con contexto propio.
+
+Umbrales (los generales viven en el `CLAUDE.md` global; acá van los de este
+repo):
+
+- Decidir o verificar sobre 1–3 archivos: inline.
+- Entender algo que abarca 4+ archivos: un subagente de exploración, que
+  devuelve un resumen corto y no el volcado de los archivos.
+- Escribir 2+ archivos no triviales: **un solo** subagente escritor.
+- Cambios mecánicos ya entendidos en un archivo: inline. Delegarlos cuesta
+  más de lo que ahorran.
+
+Delegar **grueso, no seguido**: cada subagente arranca en frío y no hereda el
+contexto del padre. Diez delegaciones de un archivo son diez arranques en
+frío; una de diez archivos es uno.
+
+### Por qué acá no van escritores en paralelo
+
+`arca-worker` importa código fuente de `arca-api` cruzando el límite de
+módulo. Eso hace que estos cambios sean intrínsecamente cross-module y que
+partirlos entre agentes concurrentes rompa el typecheck de ambos lados:
+
+- `repo/tipos.ts`, `repo/sqlite.ts`, `esquema.sql`, `crypto/envelope.ts`.
+- Los tipos espejados en `arca-api/src/dominio/tipos.ts`,
+  `arca-app/src/types.ts` y `arca-worker/src/arca/errors.ts`.
+
+Todo eso va en un único escritor, que cierra corriendo `npm run check` (que
+ya cubre el typecheck de los tres módulos). Worktrees aislados solo con
+aprobación explícita, y nunca para trabajo que toque esos archivos.
