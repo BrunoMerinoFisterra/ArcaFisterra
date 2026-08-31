@@ -131,6 +131,20 @@ export async function obtenerDetalleCliente(clienteId: string): Promise<DetalleC
   }
 }
 
+/**
+ * Carga o corrige la razón social de un contribuyente ARCA.
+ * El nombre es global: vale en todo el panel, no sólo en este cliente.
+ */
+export function guardarNombreContribuyente(
+  cuit: string,
+  nombre: string,
+): Promise<{ cuit: string; nombre: string }> {
+  return pedir<{ cuit: string; nombre: string }>(
+    `/contribuyentes/${encodeURIComponent(cuit)}`,
+    { method: 'PUT', body: JSON.stringify({ nombre }) },
+  );
+}
+
 /** Registra la apertura dentro de la app y devuelve el detalle persistido. */
 export function marcarNotificacionVista(
   clienteId: string,

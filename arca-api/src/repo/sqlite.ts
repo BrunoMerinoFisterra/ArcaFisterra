@@ -365,6 +365,45 @@ export function crearRepositorioSqlite(opciones: OpcionesSqlite): Repositorio & 
       return aCliente(f);
     },
 
+    async nombresDeContribuyentes(cuits) {
+      const digitos = [...new Set(cuits.map((cuit) => cuit.replace(/\D/g, '')))].filter(
+        (cuit) => cuit.length === 11,
+      );
+      if (digitos.length === 0) return {};
+      const huecos = digitos.map(() => '?').join(',');
+
+      // Los clientes primero: si el CUIT ya es un cliente del panel, su razón
+      // social es la fuente de verdad y no hay que cargar nada a mano.
+      const resuelto: Record<string, string> = {};
+      for (const fila of todos<{ cuit: string; razon_social: string }>(
+        `SELECT cuit, razon_social FROM arca_clientes
+          WHERE REPLACE(REPLACE(cuit, '-', ''), ' ', '') IN (${huecos})`,
+        ...digitos,
+      )) {
+        resuelto[fila.cuit.replace(/\D/g, '')] = fila.razon_social;
+      }
+
+      for (const fila of todos<{ cuit: string; nombre: string }>(
+        `SELECT cuit, nombre FROM arca_contribuyentes WHERE cuit IN (${huecos})`,
+        ...digitos,
+      )) {
+        if (!resuelto[fila.cuit]) resuelto[fila.cuit] = fila.nombre;
+      }
+      return resuelto;
+    },
+
+    async guardarNombreContribuyente(cuit, nombre) {
+      correr(
+        `INSERT INTO arca_contribuyentes (cuit, nombre, actualizado_en)
+         VALUES (?, ?, ?)
+         ON CONFLICT(cuit) DO UPDATE SET nombre = excluded.nombre,
+                                         actualizado_en = excluded.actualizado_en`,
+        cuit.replace(/\D/g, ''),
+        nombre,
+        new Date().toISOString(),
+      );
+    },
+
     async asignarClienteA(usuarioId, clienteId) {
       // En transacción para que el chequeo de existencia y el alta de la
       // asignación no se separen: el PRIMARY KEY de arca_user_clientes ya

@@ -181,6 +181,25 @@ export interface Repositorio {
     notificaciones: NotificacionNueva[],
   ): Promise<{ insertadas: number; actualizadas: number }>;
 
+  /* --- Razón social de los contribuyentes agrupados --------------------
+   *
+   * Cuentas Tributarias devuelve datos de VARIOS contribuyentes bajo una misma
+   * cuenta ARCA, y su desplegable trae sólo el CUIT — el nombre no viene. Estos
+   * dos métodos resuelven ese hueco.
+   * ------------------------------------------------------------------- */
+
+  /**
+   * Razón social de cada CUIT pedido. Resuelve primero contra los clientes ya
+   * cargados (ese nombre ya lo tenés) y después contra los cargados a mano.
+   *
+   * Devuelve sólo los que tienen nombre: un CUIT ausente del resultado es uno
+   * sin identificar, que la UI muestra como hasta ahora.
+   */
+  nombresDeContribuyentes(cuits: readonly string[]): Promise<Record<string, string>>;
+
+  /** Carga o corrige la razón social de un CUIT. Vale para todo el panel. */
+  guardarNombreContribuyente(cuit: string, nombre: string): Promise<void>;
+
   /** Reemplaza la foto completa de la pestaña Deudas de Cuentas Tributarias. */
   reemplazarSaldos(clienteId: string, saldos: SaldoTributarioNuevo[]): Promise<number>;
 

@@ -179,6 +179,50 @@ for (const [motor, crearRepo] of MOTORES) {
       }
     });
 
+    test('la razón social del contribuyente se resuelve y se puede cargar a mano', async () => {
+      const s = await levantar(crearRepo);
+      try {
+        const admin = await s.login('bruno@fisterra.com');
+
+        const detalle = (await (await s.get('/clientes/c1', admin)).json()) as {
+          cliente: { cuit: string; razonSocial: string };
+          contribuyentes: Record<string, string>;
+        };
+        const cuitDigitos = detalle.cliente.cuit.replace(/\D/g, '');
+
+        // Si el CUIT agrupado ya es un cliente del panel, el nombre sale solo:
+        // no hay que cargar nada a mano.
+        assert.equal(detalle.contribuyentes[cuitDigitos], detalle.cliente.razonSocial);
+
+        // Y uno que no es cliente se carga a mano. 30-70987654-2 es un CUIT
+        // válido de la semilla de otro cliente; alcanza para probar el alta.
+        const alta = await s.enviar('/contribuyentes/27-23456789-1', 'PUT', admin, {
+          nombre: 'Estudio Contable de Prueba',
+        });
+        assert.equal(alta.status, 200);
+        assert.deepEqual(await alta.json(), {
+          cuit: '27-23456789-1',
+          nombre: 'Estudio Contable de Prueba',
+        });
+
+        // Un CUIT mal tipeado deja un nombre huérfano que nadie va a notar,
+        // porque el grupo se sigue mostrando sin nombre. Se rechaza en el alta.
+        assert.equal(
+          (await s.enviar('/contribuyentes/27-23456789-9', 'PUT', admin, { nombre: 'Cualquiera' }))
+            .status,
+          400,
+        );
+        assert.equal(
+          (await s.enviar('/contribuyentes/27-23456789-1', 'PUT', admin, { nombre: 'x' })).status,
+          400,
+        );
+
+        assert.equal((await s.get('/contribuyentes/27-23456789-1')).status, 401);
+      } finally {
+        await s.cerrar();
+      }
+    });
+
     test('cada uno cambia su propia contraseña, incluidos los administradores', async () => {
       const s = await levantar(crearRepo);
       const loginCrudo = (email: string, password: string) =>

@@ -219,6 +219,21 @@ CREATE TABLE IF NOT EXISTS arca_sync_jobs (
   disponible_desde TEXT
 );
 
+-- Razon social de los contribuyentes que aparecen agrupados en Cuentas
+-- Tributarias. ARCA NO la informa: su desplegable de CUIT trae solo el numero,
+-- verificado contra los artifacts guardados. Por eso se cargan a mano.
+--
+-- La clave son los 11 digitos sin guiones, para que la busqueda no dependa del
+-- formato con que quedo guardado el CUIT en cada tabla.
+--
+-- No lleva cliente_id a proposito: un CUIT tiene UNA razon social, sin importar
+-- desde que cliente se lo mire. Cargarlo una vez lo muestra en todo el panel.
+CREATE TABLE IF NOT EXISTS arca_contribuyentes (
+  cuit           TEXT PRIMARY KEY,
+  nombre         TEXT NOT NULL,
+  actualizado_en TEXT NOT NULL
+);
+
 -- Candados anonimos por CUIT de acceso ARCA. `clave` es un HMAC; nunca se
 -- persiste el CUIT usado para iniciar sesion.
 CREATE TABLE IF NOT EXISTS arca_sync_locks (

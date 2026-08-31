@@ -134,6 +134,8 @@ export async function crearRepositorioMemoria(): Promise<Repositorio> {
   ]);
 
   const credenciales = new Map<string, CredencialCifrada>();
+  /** CUIT (11 dígitos, sin guiones) -> razón social cargada a mano. */
+  const nombresContribuyentes = new Map<string, string>();
   const jobs: SyncJob[] = [];
   const propietariosJob = new Map<string, string>();
   const leasesJob = new Map<string, string>();
@@ -385,6 +387,24 @@ export async function crearRepositorioMemoria(): Promise<Repositorio> {
       asignaciones.get(usuarioId)?.add(cliente.id);
       return cliente;
     },
+    async nombresDeContribuyentes(cuits) {
+      const digitos = [...new Set(cuits.map((cuit) => cuit.replace(/\D/g, '')))].filter(
+        (cuit) => cuit.length === 11,
+      );
+      const resuelto: Record<string, string> = {};
+      for (const cuit of digitos) {
+        // El cliente cargado manda: ese nombre ya lo tenés.
+        const cliente = clientes.find((c) => c.cuit.replace(/\D/g, '') === cuit);
+        const nombre = cliente?.razonSocial ?? nombresContribuyentes.get(cuit);
+        if (nombre) resuelto[cuit] = nombre;
+      }
+      return resuelto;
+    },
+
+    async guardarNombreContribuyente(cuit, nombre) {
+      nombresContribuyentes.set(cuit.replace(/\D/g, ''), nombre);
+    },
+
     async asignarClienteA(usuarioId, clienteId) {
       if (!clientes.some((cliente) => cliente.id === clienteId)) return 'CLIENTE_INEXISTENTE';
       const asignados = asignaciones.get(usuarioId) ?? new Set<string>();

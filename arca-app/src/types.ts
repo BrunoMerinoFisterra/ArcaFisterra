@@ -194,6 +194,12 @@ export interface DetalleCliente {
   vencimientos: Vencimiento[];
   ddjjPendientes: DeclaracionJuradaPendiente[];
   comprobantes: Comprobante[];
+  /**
+   * Razón social por CUIT (11 dígitos, sin guiones) de los contribuyentes que
+   * aparecen agrupados. ARCA no la informa, así que se carga a mano: un CUIT
+   * ausente de acá es uno todavía sin identificar.
+   */
+  contribuyentes: Record<string, string>;
 }
 
 /** Contadores que se muestran en la card del cliente. */
