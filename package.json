@@ -11,7 +11,7 @@
     "worker:check": "npm --prefix arca-worker run check:local",
     "demo:crear": "npm --prefix arca-api run demo:crear",
     "typecheck": "npm --prefix arca-api run typecheck && npm --prefix arca-app run typecheck && npm --prefix arca-worker run typecheck",
-    "test": "npm --prefix arca-api test && npm --prefix arca-worker test",
+    "test": "npm --prefix arca-api test && npm --prefix arca-worker test && npm --prefix arca-app test",
     "build": "npm --prefix arca-app run build",
     "check": "npm run typecheck && npm test && npm run build"
   }

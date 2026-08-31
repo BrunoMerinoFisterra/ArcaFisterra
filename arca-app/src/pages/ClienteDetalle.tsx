@@ -26,6 +26,7 @@ import type {
 } from '../types';
 import { desde, fecha, pesos, plazo } from '../lib/format';
 import { plural } from '../lib/plural';
+import { descargarCsv, type ValorCsv } from '../lib/csv';
 import { Badge, EstadoSyncBadge } from '../components/Badge';
 import { ModalGraficoComprobantes } from '../components/GraficoComprobantes';
 import { ModalCargando } from '../components/ModalCargando';
@@ -288,6 +289,8 @@ export default function ClienteDetalle() {
         titulo="Domicilio Fiscal Electrónico"
         vacio="Sin notificaciones."
         accion={
+          <>
+            <BotonExportar nombre={`${cliente.razonSocial}-notificaciones`} {...csvNotificaciones(notificaciones)} />
           <button
             type="button"
             className="btn btn--chico"
@@ -296,6 +299,7 @@ export default function ClienteDetalle() {
           >
             {moduloActivo === 'domicilio' ? 'Abriendo en ARCA…' : 'Actualizar y abrir en ARCA'}
           </button>
+          </>
         }
       >
         {mensajeDomicilio && <p className="estado-facilidades">{mensajeDomicilio}</p>}
@@ -326,6 +330,8 @@ export default function ClienteDetalle() {
         titulo="Vencimientos"
         vacio="Sin vencimientos informados por ARCA."
         accion={
+          <>
+            <BotonExportar nombre={`${cliente.razonSocial}-vencimientos`} {...csvVencimientos(vencimientos, detalle.contribuyentes)} />
           <button
             type="button"
             className="btn btn--chico"
@@ -334,6 +340,7 @@ export default function ClienteDetalle() {
           >
             {moduloActivo === 'saldos' ? 'Consultando ARCA…' : 'Actualizar desde ARCA'}
           </button>
+          </>
         }
       >
         {mensajeSaldos && <p className="estado-facilidades">{mensajeSaldos}</p>}
@@ -355,6 +362,8 @@ export default function ClienteDetalle() {
         titulo="Deudas"
         vacio="Sin saldos registrados."
         accion={
+          <>
+            <BotonExportar nombre={`${cliente.razonSocial}-deudas`} {...csvSaldos(saldos, detalle.contribuyentes)} />
           <button
             type="button"
             className="btn btn--chico"
@@ -363,6 +372,7 @@ export default function ClienteDetalle() {
           >
             {moduloActivo === 'saldos' ? 'Consultando ARCA…' : 'Actualizar desde ARCA'}
           </button>
+          </>
         }
       >
         {mensajeSaldos && <p className="estado-facilidades">{mensajeSaldos}</p>}
@@ -388,6 +398,8 @@ export default function ClienteDetalle() {
         titulo="DDJJ pendientes de presentación"
         vacio="Sin declaraciones juradas pendientes informadas por ARCA."
         accion={
+          <>
+            <BotonExportar nombre={`${cliente.razonSocial}-ddjj-pendientes`} {...csvDdjj(ddjjPendientes, detalle.contribuyentes)} />
           <button
             type="button"
             className="btn btn--chico"
@@ -396,6 +408,7 @@ export default function ClienteDetalle() {
           >
             {moduloActivo === 'saldos' ? 'Consultando ARCA…' : 'Actualizar desde ARCA'}
           </button>
+          </>
         }
       >
         {mensajeSaldos && <p className="estado-facilidades">{mensajeSaldos}</p>}
@@ -417,6 +430,8 @@ export default function ClienteDetalle() {
         titulo="Mis Facilidades"
         vacio="Sin planes de pago."
         accion={
+          <>
+            <BotonExportar nombre={`${cliente.razonSocial}-facilidades`} {...csvPlanes(planes)} />
           <button
             type="button"
             className="btn btn--chico"
@@ -425,6 +440,7 @@ export default function ClienteDetalle() {
           >
             {moduloActivo === 'facilidades' ? 'Consultando ARCA…' : 'Actualizar desde ARCA'}
           </button>
+          </>
         }
       >
         {mensajePlanes && <p className="estado-facilidades">{mensajePlanes}</p>}
@@ -453,6 +469,11 @@ export default function ClienteDetalle() {
         titulo={`Mis Comprobantes — ${anio} — ${emitidos.length} emitidos, ${recibidos.length} recibidos`}
         vacio="Sin comprobantes en el año actual."
         accion={
+          <>
+            <BotonExportar
+              nombre={`${cliente.razonSocial}-comprobantes-${anio}`}
+              {...csvComprobantes(comprobantesAnio, detalle.contribuyentes)}
+            />
           <div className="seccion__acciones">
             <button
               type="button"
@@ -471,6 +492,7 @@ export default function ClienteDetalle() {
               {moduloActivo === 'comprobantes' ? 'Consultando ARCA…' : 'Actualizar desde ARCA'}
             </button>
           </div>
+          </>
         }
       >
         {mensajeComprobantes && <p className="estado-facilidades">{mensajeComprobantes}</p>}
@@ -493,6 +515,163 @@ export default function ClienteDetalle() {
 
 function totalSaldo(saldo: SaldoTributario): number {
   return saldo.saldo + saldo.interesResarcitorio + saldo.interesPunitorio;
+}
+
+/**
+ * Columnas de cada categoría.
+ *
+ * Se exporta el dato crudo, no lo formateado en pantalla: las fechas van en
+ * ISO y los importes como número, para que Excel pueda ordenarlos y sumarlos.
+ * Un `$ 1.500.400,00` bonito entra como texto y no sirve para nada.
+ */
+type Nombres = Record<string, string>;
+const nombreDe = (nombres: Nombres, cuit: string) => nombres[cuit.replace(/\D/g, '')] ?? '';
+
+const csvNotificaciones = (datos: Notificacion[]) => ({
+  encabezados: ['fecha', 'organismo', 'asunto', 'estado', 'leida_en_arca', 'id_comunicacion'],
+  filas: datos.map((n): ValorCsv[] => [
+    n.fecha,
+    n.organismo,
+    n.asunto,
+    n.estado,
+    n.leida ? 'si' : 'no',
+    n.idComunicacion,
+  ]),
+});
+
+const csvSaldos = (datos: SaldoTributario[], nombres: Nombres) => ({
+  encabezados: [
+    'cuit', 'contribuyente', 'establecimiento', 'impuesto', 'concepto', 'subconcepto',
+    'periodo', 'anticipo_cuota', 'vencimiento', 'saldo', 'interes_resarcitorio',
+    'interes_punitorio', 'total',
+  ],
+  filas: datos.map((s): ValorCsv[] => [
+    s.contribuyenteCuit,
+    nombreDe(nombres, s.contribuyenteCuit),
+    s.establecimiento,
+    s.impuesto,
+    s.concepto,
+    s.subconcepto,
+    s.periodo,
+    s.anticipoCuota,
+    s.fechaVencimiento,
+    s.saldo,
+    s.interesResarcitorio,
+    s.interesPunitorio,
+    totalSaldo(s),
+  ]),
+});
+
+const csvVencimientos = (datos: DetalleCliente['vencimientos'], nombres: Nombres) => ({
+  encabezados: [
+    'cuit', 'contribuyente', 'impuesto', 'concepto', 'subconcepto', 'periodo',
+    'anticipo_cuota', 'fecha', 'detalle',
+  ],
+  filas: datos.map((v): ValorCsv[] => [
+    v.contribuyenteCuit,
+    nombreDe(nombres, v.contribuyenteCuit),
+    v.impuesto,
+    v.concepto,
+    v.subconcepto,
+    v.periodo,
+    v.anticipoCuota,
+    v.fecha,
+    v.detalle,
+  ]),
+});
+
+const csvDdjj = (datos: DetalleCliente['ddjjPendientes'], nombres: Nombres) => ({
+  encabezados: [
+    'cuit', 'contribuyente', 'establecimiento', 'impuesto', 'concepto',
+    'subconcepto', 'periodo', 'fecha',
+  ],
+  filas: datos.map((d): ValorCsv[] => [
+    d.contribuyenteCuit,
+    nombreDe(nombres, d.contribuyenteCuit),
+    d.establecimiento,
+    d.impuesto,
+    d.concepto,
+    d.subconcepto,
+    d.periodo,
+    d.fecha,
+  ]),
+});
+
+const csvPlanes = (datos: PlanPago[]) => ({
+  encabezados: [
+    'numero', 'concepto', 'presentacion', 'estado', 'situacion', 'cuotas_totales',
+    'cuotas_pagas', 'cuotas_impagas', 'monto_cuota', 'monto_consolidado',
+    'proximo_vencimiento', 'total_pagado',
+  ],
+  filas: datos.map((p): ValorCsv[] => [
+    p.numero,
+    p.concepto,
+    p.fechaPresentacion,
+    p.estado,
+    p.situacion,
+    p.cuotasTotales,
+    p.cuotasPagas,
+    p.cuotasImpagas,
+    p.montoCuota,
+    p.montoConsolidado,
+    p.proximoVencimiento,
+    p.totalPagado,
+  ]),
+});
+
+const csvComprobantes = (datos: Comprobante[], nombres: Nombres) => ({
+  encabezados: [
+    'cuit', 'contribuyente', 'tipo', 'fecha', 'comprobante', 'punto_venta',
+    'numero', 'contraparte', 'cuit_contraparte', 'neto', 'iva', 'total',
+  ],
+  filas: datos.map((c): ValorCsv[] => [
+    c.contribuyenteCuit,
+    nombreDe(nombres, c.contribuyenteCuit),
+    c.tipo,
+    c.fecha,
+    c.tipoComprobante,
+    c.puntoVenta,
+    c.numero,
+    c.contraparte,
+    c.cuitContraparte,
+    c.neto,
+    c.iva,
+    c.total,
+  ]),
+});
+
+/**
+ * Botón de exportación de una sección.
+ *
+ * El CSV se arma en el navegador con los datos que ya están en pantalla: pedir
+ * de nuevo lo mismo al servidor sería una ruta más para mantener y proteger,
+ * sin ganar nada.
+ */
+function BotonExportar({
+  nombre,
+  encabezados,
+  filas,
+}: {
+  nombre: string;
+  encabezados: string[];
+  filas: ValorCsv[][];
+}) {
+  if (filas.length === 0) return null;
+  return (
+    <button
+      type="button"
+      className="btn btn--chico"
+      title={`Exportar ${filas.length} filas a CSV`}
+      onClick={(e) => {
+        // La cabecera de la sección despliega al hacer clic; sin esto, exportar
+        // también la abre o la cierra.
+        e.stopPropagation();
+        descargarCsv(nombre, encabezados, filas);
+      }}
+    >
+      Exportar CSV
+    </button>
+  );
 }
 
 function AgrupadosPorCuit<T extends { contribuyenteCuit: string }>({
