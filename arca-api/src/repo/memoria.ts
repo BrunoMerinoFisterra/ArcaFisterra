@@ -387,6 +387,16 @@ export async function crearRepositorioMemoria(): Promise<Repositorio> {
       asignaciones.get(usuarioId)?.add(cliente.id);
       return cliente;
     },
+    async clientesParaSyncAutomatica(anteriorAIso) {
+      return clientes
+        .filter(
+          (cliente) =>
+            cliente.estadoCredencial === 'OK' &&
+            (cliente.ultimoSync === null || cliente.ultimoSync < anteriorAIso),
+        )
+        .sort((a, b) => (a.ultimoSync ?? '').localeCompare(b.ultimoSync ?? ''));
+    },
+
     async nombresDeContribuyentes(cuits) {
       const digitos = [...new Set(cuits.map((cuit) => cuit.replace(/\D/g, '')))].filter(
         (cuit) => cuit.length === 11,

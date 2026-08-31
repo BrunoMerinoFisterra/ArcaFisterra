@@ -365,6 +365,16 @@ export function crearRepositorioSqlite(opciones: OpcionesSqlite): Repositorio & 
       return aCliente(f);
     },
 
+    async clientesParaSyncAutomatica(anteriorAIso) {
+      return todos<FilaCliente>(
+        `SELECT * FROM arca_clientes
+          WHERE estado_credencial = 'OK'
+            AND (ultimo_sync IS NULL OR ultimo_sync < ?)
+          ORDER BY COALESCE(ultimo_sync, '') , razon_social`,
+        anteriorAIso,
+      ).map(aCliente);
+    },
+
     async nombresDeContribuyentes(cuits) {
       const digitos = [...new Set(cuits.map((cuit) => cuit.replace(/\D/g, '')))].filter(
         (cuit) => cuit.length === 11,

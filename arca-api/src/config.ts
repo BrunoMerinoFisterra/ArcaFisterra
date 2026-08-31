@@ -38,6 +38,62 @@ export interface Config {
    * usuario todavía. null cuando no se configuró.
    */
   adminInicial: { email: string; nombre: string; password: string } | null;
+  syncNocturna: ConfigSyncNocturna;
+}
+
+export interface ConfigSyncNocturna {
+  /** Apagada por defecto: nadie quiere sincronizaciones que no pidió. */
+  activa: boolean;
+  /** Ventana en hora de `America/Buenos_Aires`: `desde` inclusive, `hasta` exclusive. */
+  horaDesde: number;
+  horaHasta: number;
+  /**
+   * No reencola un cliente si ya se INTENTÓ hace menos de estas horas.
+   *
+   * `finalizarJob` actualiza `ultimo_sync` aunque el job termine en error, así
+   * que esto es lo que evita que un cliente con problemas se reencole toda la
+   * noche. Sin este freno, un fallo se convierte en un reintento en loop —
+   * exactamente lo que el sistema evita en todos lados para no bloquear cuentas.
+   */
+  minimoHorasEntreIntentos: number;
+  /** Cada cuánto revisa si entró en la ventana. */
+  intervaloMinutos: number;
+}
+
+function numeroEnRango(nombre: string, valor: string | undefined, def: number, min: number, max: number): number {
+  const n = Number(valor ?? def);
+  if (!Number.isInteger(n) || n < min || n > max) {
+    throw new Error(`${nombre} debe ser un entero entre ${min} y ${max}.`);
+  }
+  return n;
+}
+
+function leerSyncNocturna(): ConfigSyncNocturna {
+  const activa = process.env['SYNC_NOCTURNA'] === '1';
+  const horaDesde = numeroEnRango('SYNC_NOCTURNA_DESDE', process.env['SYNC_NOCTURNA_DESDE'], 2, 0, 23);
+  const horaHasta = numeroEnRango('SYNC_NOCTURNA_HASTA', process.env['SYNC_NOCTURNA_HASTA'], 5, 1, 24);
+  if (horaHasta <= horaDesde) {
+    throw new Error('SYNC_NOCTURNA_HASTA tiene que ser mayor que SYNC_NOCTURNA_DESDE.');
+  }
+  return {
+    activa,
+    horaDesde,
+    horaHasta,
+    minimoHorasEntreIntentos: numeroEnRango(
+      'SYNC_NOCTURNA_MIN_HORAS',
+      process.env['SYNC_NOCTURNA_MIN_HORAS'],
+      12,
+      1,
+      168,
+    ),
+    intervaloMinutos: numeroEnRango(
+      'SYNC_NOCTURNA_INTERVALO_MIN',
+      process.env['SYNC_NOCTURNA_INTERVALO_MIN'],
+      15,
+      1,
+      120,
+    ),
+  };
 }
 
 /** El mismo minimo que exige el alta de usuarios por HTTP. */
@@ -97,5 +153,6 @@ export function cargarConfig(): Config {
     sqlitePath: process.env['SQLITE_PATH'] ?? 'arca.db',
     sembrarDemo: process.env['SEMBRAR_DEMO'] !== '0',
     produccion: process.env['NODE_ENV'] === 'production',
+    syncNocturna: leerSyncNocturna(),
   };
 }

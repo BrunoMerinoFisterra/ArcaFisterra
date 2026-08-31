@@ -4,6 +4,7 @@ import { crearApp } from './http/app.js';
 import { crearRepositorioMemoria } from './repo/memoria.js';
 import { crearRepositorioSqlite } from './repo/sqlite.js';
 import type { Repositorio } from './repo/tipos.js';
+import { iniciarSyncNocturna } from './sync-nocturna.js';
 
 const config = cargarConfig();
 
@@ -21,4 +22,5 @@ crearApp(repo, config).listen(config.puerto, () => {
       (config.repositorio === 'sqlite' ? ` (${config.sqlitePath})` : ' (no persiste)'),
   );
   console.log(`  CORS        : ${config.origenPermitido}`);
+  iniciarSyncNocturna(repo, config.syncNocturna);
 });

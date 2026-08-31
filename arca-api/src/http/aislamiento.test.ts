@@ -34,6 +34,15 @@ const config: Config = {
   sqlitePath: ':memory:',
   sembrarDemo: true,
   produccion: false,
+  // Apagada: estos tests prueban las rutas HTTP, no el planificador. Si se
+  // activara, encolaría jobs por su cuenta y ensuciaría las aserciones de cola.
+  syncNocturna: {
+    activa: false,
+    horaDesde: 2,
+    horaHasta: 5,
+    minimoHorasEntreIntentos: 12,
+    intervaloMinutos: 15,
+  },
 };
 
 type CrearRepo = () => Promise<Repositorio>;

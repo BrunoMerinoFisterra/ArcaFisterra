@@ -285,6 +285,20 @@ export interface Repositorio {
     detalle: string,
   ): Promise<void>;
 
+  /**
+   * Clientes que la sincronizacion nocturna deberia encolar: credencial en
+   * condiciones y sin intento desde `anteriorAIso`.
+   *
+   * Va en este bloque y NO recibe usuarioId porque el planificador tampoco
+   * actua en nombre de un usuario: mira la cartera entera. Vale la misma regla
+   * que para los otros tres — ninguna ruta HTTP puede llamarlo.
+   *
+   * El filtro por credencial es el que importa: un cliente marcado INVALIDA o
+   * BLOQUEADA queda afuera, para no reintentar de noche contra una clave que
+   * ya se sabe mala y terminar bloqueando la cuenta del contribuyente.
+   */
+  clientesParaSyncAutomatica(anteriorAIso: string): Promise<Cliente[]>;
+
   /** Cierra jobs RUNNING abandonados por una caida del worker. */
   recuperarJobsInterrumpidos(ahoraIso: string, antesDeIsoLegacy: string): Promise<number>;
 
