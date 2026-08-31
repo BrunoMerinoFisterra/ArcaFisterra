@@ -176,6 +176,10 @@ CREATE TABLE IF NOT EXISTS arca_ddjj_pendientes (
 CREATE TABLE IF NOT EXISTS arca_comprobantes (
   id                TEXT PRIMARY KEY,
   cliente_id        TEXT NOT NULL REFERENCES arca_clientes(id) ON DELETE CASCADE,
+  -- CUIT del contribuyente al que pertenece el comprobante. Una misma clave
+  -- fiscal puede actuar por varios, igual que en Cuentas Tributarias, y cada
+  -- uno tiene su propia numeracion de comprobantes.
+  contribuyente_cuit TEXT NOT NULL,
   tipo              TEXT NOT NULL CHECK (tipo IN ('EMITIDO', 'RECIBIDO')),
   fecha             TEXT NOT NULL,
   -- Código numérico de ARCA (1 = Factura A, 6 = Factura B, 11 = Factura C...).
@@ -197,7 +201,11 @@ CREATE TABLE IF NOT EXISTS arca_comprobantes (
   -- Usa el CÓDIGO y no el nombre a propósito. Con el nombre adentro, corregir
   -- una etiqueta de la tabla de códigos convertía a cada comprobante ya
   -- guardado en uno "nuevo", y el sync siguiente los duplicaba todos.
-  UNIQUE (cliente_id, tipo, codigo_comprobante, punto_venta, numero)
+  --
+  -- `contribuyente_cuit` va adentro porque cada contribuyente numera sus
+  -- comprobantes por su cuenta: sin él, la Factura A 0001-00000001 de dos
+  -- contribuyentes distintos colisiona y una pisa a la otra en silencio.
+  UNIQUE (cliente_id, contribuyente_cuit, tipo, codigo_comprobante, punto_venta, numero)
 );
 
 CREATE TABLE IF NOT EXISTS arca_sync_jobs (

@@ -776,21 +776,20 @@ for (const [motor, crearRepo] of MOTORES) {
       // cada corrida infla los totales y el contador ve números falsos.
       const s = await levantar(crearRepo);
       try {
-        const lote = [
-          {
-            tipo: 'RECIBIDO' as const,
-            fecha: '2026-07-15',
-            codigoComprobante: 1,
-            tipoComprobante: 'Factura A',
-            puntoVenta: 9,
-            numero: 12_345,
-            contraparte: 'Proveedor Testigo S.A.',
-            cuitContraparte: '30-71000111-8',
-            neto: 100_000,
-            iva: 21_000,
-            total: 121_000,
-          },
-        ];
+        const comprobante = {
+          tipo: 'RECIBIDO' as const,
+          fecha: '2026-07-15',
+          codigoComprobante: 1,
+          tipoComprobante: 'Factura A',
+          puntoVenta: 9,
+          numero: 12_345,
+          contraparte: 'Proveedor Testigo S.A.',
+          cuitContraparte: '30-71000111-8',
+          neto: 100_000,
+          iva: 21_000,
+          total: 121_000,
+        };
+        const lote = [{ ...comprobante, contribuyenteCuit: '30-71234567-1' }];
 
         const antes = (await s.repo.comprobantesDe('c1')).length;
 
@@ -801,6 +800,19 @@ for (const [motor, crearRepo] of MOTORES) {
         assert.deepEqual(segunda, { insertados: 0, repetidos: 1 }, 'la segunda corrida duplicó');
 
         assert.equal((await s.repo.comprobantesDe('c1')).length, antes + 1);
+
+        // La misma numeración, pero de OTRO contribuyente de la misma clave
+        // fiscal, es un comprobante distinto. Sin el CUIT en la unicidad, este
+        // se perdía pisado por el anterior y nadie se enteraba.
+        const otroContribuyente = await s.repo.guardarComprobantes('c1', [
+          { ...comprobante, contribuyenteCuit: '30-70987654-2' },
+        ]);
+        assert.deepEqual(
+          otroContribuyente,
+          { insertados: 1, repetidos: 0 },
+          'dos contribuyentes con la misma numeración se pisaron entre sí',
+        );
+        assert.equal((await s.repo.comprobantesDe('c1')).length, antes + 2);
       } finally {
         await s.cerrar();
       }

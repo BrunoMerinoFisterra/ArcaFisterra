@@ -81,6 +81,12 @@ export const SELECCION_CONTRIBUYENTE = {
     'h1:has-text("Elegí una persona para ingresar")',
     'h1:has-text("Elegi una persona para ingresar")',
   ],
+  /**
+   * Todas las opciones de la pantalla. Sirve para ENUMERAR los contribuyentes;
+   * para elegir uno se usa `linkContribuyentePorCuit`, que matchea por CUIT
+   * exacto. Nunca seleccionar por posicion dentro de esta lista.
+   */
+  opciones: 'form[name="seleccionaEmpresaForm"] .panels-row a.panel',
 } as const;
 
 export const linkContribuyentePorCuit = (cuitFormateado: string) =>

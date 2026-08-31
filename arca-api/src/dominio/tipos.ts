@@ -163,6 +163,14 @@ export type TipoComprobante = 'EMITIDO' | 'RECIBIDO';
 export interface Comprobante {
   id: string;
   clienteId: string;
+  /**
+   * CUIT del contribuyente que emitió o recibió el comprobante.
+   *
+   * Una misma clave fiscal puede actuar por varios, igual que en Cuentas
+   * Tributarias. No confundir con `cuitContraparte`, que es quién está del otro
+   * lado de la factura.
+   */
+  contribuyenteCuit: string;
   tipo: TipoComprobante;
   fecha: string;
   /**

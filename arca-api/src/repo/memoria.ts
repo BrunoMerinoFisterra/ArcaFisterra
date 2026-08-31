@@ -127,6 +127,10 @@ export async function crearRepositorioMemoria(): Promise<Repositorio> {
     },
   ];
 
+  /** CUIT del cliente sembrado, para no repetirlo en cada fila de demo. */
+  const cuitDe = (clienteId: string): string =>
+    clientes.find((cliente) => cliente.id === clienteId)?.cuit ?? '';
+
   /** Espeja la tabla arca_user_clientes. */
   const asignaciones = new Map<string, Set<string>>([
     ['u1', new Set(['c1', 'c2', 'c3', 'c4', 'c5', 'c6'])],
@@ -252,13 +256,13 @@ export async function crearRepositorioMemoria(): Promise<Repositorio> {
   const ddjjPendientes: DeclaracionJuradaPendiente[] = [];
 
   const comprobantes: Comprobante[] = [
-    { id: 'k1', clienteId: 'c1', tipo: 'EMITIDO', fecha: diasDesdeHoy(-2), codigoComprobante: 1, tipoComprobante: 'Factura A', puntoVenta: 3, numero: 20481, contraparte: 'Distribuidora Paraná S.A.', cuitContraparte: '30-70112233-6', neto: 1_240_000, iva: 260_400, total: 1_500_400 },
-    { id: 'k2', clienteId: 'c1', tipo: 'EMITIDO', fecha: diasDesdeHoy(-8), codigoComprobante: 1, tipoComprobante: 'Factura A', puntoVenta: 3, numero: 20480, contraparte: 'Agro Insumos del Litoral S.R.L.', cuitContraparte: '30-71455667-9', neto: 890_000, iva: 186_900, total: 1_076_900 },
-    { id: 'k3', clienteId: 'c1', tipo: 'RECIBIDO', fecha: diasDesdeHoy(-4), codigoComprobante: 1, tipoComprobante: 'Factura A', puntoVenta: 12, numero: 884_321, contraparte: 'Transporte Andino S.A.', cuitContraparte: '30-68997744-4', neto: 415_000, iva: 87_150, total: 502_150 },
-    { id: 'k4', clienteId: 'c1', tipo: 'RECIBIDO', fecha: diasDesdeHoy(-11), codigoComprobante: 3, tipoComprobante: 'Nota de Crédito A', puntoVenta: 12, numero: 884_190, contraparte: 'Transporte Andino S.A.', cuitContraparte: '30-68997744-4', neto: -62_000, iva: -13_020, total: -75_020 },
-    { id: 'k5', clienteId: 'c2', tipo: 'EMITIDO', fecha: diasDesdeHoy(-1), codigoComprobante: 6, tipoComprobante: 'Factura B', puntoVenta: 7, numero: 15_233, contraparte: 'Consumidor Final', cuitContraparte: '—', neto: 268_000, iva: 56_280, total: 324_280 },
-    { id: 'k6', clienteId: 'c2', tipo: 'RECIBIDO', fecha: diasDesdeHoy(-3), codigoComprobante: 1, tipoComprobante: 'Factura A', puntoVenta: 4, numero: 331_200, contraparte: 'Combustibles Cuyo S.A.', cuitContraparte: '30-70554433-2', neto: 1_890_000, iva: 396_900, total: 2_286_900 },
-    { id: 'k7', clienteId: 'c3', tipo: 'EMITIDO', fecha: diasDesdeHoy(-6), codigoComprobante: 11, tipoComprobante: 'Factura C', puntoVenta: 1, numero: 412, contraparte: 'Estudio Jurídico Roldán', cuitContraparte: '30-71889900-8', neto: 480_000, iva: 0, total: 480_000 },
+    { id: 'k1', clienteId: 'c1', contribuyenteCuit: cuitDe('c1'), tipo: 'EMITIDO', fecha: diasDesdeHoy(-2), codigoComprobante: 1, tipoComprobante: 'Factura A', puntoVenta: 3, numero: 20481, contraparte: 'Distribuidora Paraná S.A.', cuitContraparte: '30-70112233-6', neto: 1_240_000, iva: 260_400, total: 1_500_400 },
+    { id: 'k2', clienteId: 'c1', contribuyenteCuit: cuitDe('c1'), tipo: 'EMITIDO', fecha: diasDesdeHoy(-8), codigoComprobante: 1, tipoComprobante: 'Factura A', puntoVenta: 3, numero: 20480, contraparte: 'Agro Insumos del Litoral S.R.L.', cuitContraparte: '30-71455667-9', neto: 890_000, iva: 186_900, total: 1_076_900 },
+    { id: 'k3', clienteId: 'c1', contribuyenteCuit: cuitDe('c1'), tipo: 'RECIBIDO', fecha: diasDesdeHoy(-4), codigoComprobante: 1, tipoComprobante: 'Factura A', puntoVenta: 12, numero: 884_321, contraparte: 'Transporte Andino S.A.', cuitContraparte: '30-68997744-4', neto: 415_000, iva: 87_150, total: 502_150 },
+    { id: 'k4', clienteId: 'c1', contribuyenteCuit: cuitDe('c1'), tipo: 'RECIBIDO', fecha: diasDesdeHoy(-11), codigoComprobante: 3, tipoComprobante: 'Nota de Crédito A', puntoVenta: 12, numero: 884_190, contraparte: 'Transporte Andino S.A.', cuitContraparte: '30-68997744-4', neto: -62_000, iva: -13_020, total: -75_020 },
+    { id: 'k5', clienteId: 'c2', contribuyenteCuit: cuitDe('c2'), tipo: 'EMITIDO', fecha: diasDesdeHoy(-1), codigoComprobante: 6, tipoComprobante: 'Factura B', puntoVenta: 7, numero: 15_233, contraparte: 'Consumidor Final', cuitContraparte: '—', neto: 268_000, iva: 56_280, total: 324_280 },
+    { id: 'k6', clienteId: 'c2', contribuyenteCuit: cuitDe('c2'), tipo: 'RECIBIDO', fecha: diasDesdeHoy(-3), codigoComprobante: 1, tipoComprobante: 'Factura A', puntoVenta: 4, numero: 331_200, contraparte: 'Combustibles Cuyo S.A.', cuitContraparte: '30-70554433-2', neto: 1_890_000, iva: 396_900, total: 2_286_900 },
+    { id: 'k7', clienteId: 'c3', contribuyenteCuit: cuitDe('c3'), tipo: 'EMITIDO', fecha: diasDesdeHoy(-6), codigoComprobante: 11, tipoComprobante: 'Factura C', puntoVenta: 1, numero: 412, contraparte: 'Estudio Jurídico Roldán', cuitContraparte: '30-71889900-8', neto: 480_000, iva: 0, total: 480_000 },
   ];
 
   const puedeVer = (usuarioId: string, clienteId: string) =>
@@ -625,8 +629,14 @@ export async function crearRepositorioMemoria(): Promise<Repositorio> {
       // Espeja el UNIQUE de la tabla arca_comprobantes. Acá se hace en código
       // porque no hay motor; en SQL lo garantiza un constraint, que es lo
       // correcto — dos jobs concurrentes se pisarían igual.
-      const clave = (c: { tipo: string; codigoComprobante: number; puntoVenta: number; numero: number }) =>
-        `${c.tipo}|${c.codigoComprobante}|${c.puntoVenta}|${c.numero}`;
+      const clave = (c: {
+        contribuyenteCuit: string;
+        tipo: string;
+        codigoComprobante: number;
+        puntoVenta: number;
+        numero: number;
+      }) =>
+        `${c.contribuyenteCuit}|${c.tipo}|${c.codigoComprobante}|${c.puntoVenta}|${c.numero}`;
       const existentes = new Set(
         comprobantes.filter((c) => c.clienteId === clienteId).map(clave),
       );

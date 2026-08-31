@@ -966,6 +966,7 @@ export function crearRepositorioSqlite(opciones: OpcionesSqlite): Repositorio & 
       return todos<{
         id: string;
         cliente_id: string;
+        contribuyente_cuit: string;
         tipo: string;
         fecha: string;
         codigo_comprobante: number;
@@ -983,6 +984,7 @@ export function crearRepositorioSqlite(opciones: OpcionesSqlite): Repositorio & 
       ).map<Comprobante>((f) => ({
         id: f.id,
         clienteId: f.cliente_id,
+        contribuyenteCuit: f.contribuyente_cuit,
         tipo: f.tipo as Comprobante['tipo'],
         fecha: f.fecha,
         codigoComprobante: f.codigo_comprobante,
@@ -1004,10 +1006,12 @@ export function crearRepositorioSqlite(opciones: OpcionesSqlite): Repositorio & 
       // concurrentes podrían pasar a la vez.
       const stmt = db.prepare(
         `INSERT INTO arca_comprobantes
-           (id, cliente_id, tipo, fecha, codigo_comprobante, tipo_comprobante,
-            punto_venta, numero, contraparte, cuit_contraparte, neto, iva, total)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT (cliente_id, tipo, codigo_comprobante, punto_venta, numero) DO NOTHING`,
+           (id, cliente_id, contribuyente_cuit, tipo, fecha, codigo_comprobante,
+            tipo_comprobante, punto_venta, numero, contraparte, cuit_contraparte,
+            neto, iva, total)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (cliente_id, contribuyente_cuit, tipo, codigo_comprobante, punto_venta, numero)
+           DO NOTHING`,
       );
 
       db.exec('BEGIN');
@@ -1016,6 +1020,7 @@ export function crearRepositorioSqlite(opciones: OpcionesSqlite): Repositorio & 
           const r = stmt.run(
             randomUUID(),
             clienteId,
+            c.contribuyenteCuit,
             c.tipo,
             c.fecha,
             c.codigoComprobante,
@@ -1610,17 +1615,17 @@ function sembrarSiVacia(db: DatabaseSync): void {
 
     const comp = db.prepare(
       `INSERT INTO arca_comprobantes
-         (id, cliente_id, tipo, fecha, codigo_comprobante, tipo_comprobante, punto_venta, numero,
-          contraparte, cuit_contraparte, neto, iva, total)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         (id, cliente_id, contribuyente_cuit, tipo, fecha, codigo_comprobante, tipo_comprobante,
+          punto_venta, numero, contraparte, cuit_contraparte, neto, iva, total)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
-    comp.run('k1', 'c1', 'EMITIDO', dia(-2), 1, 'Factura A', 3, 20_481, 'Distribuidora Paraná S.A.', '30-70112233-6', 1_240_000, 260_400, 1_500_400);
-    comp.run('k2', 'c1', 'EMITIDO', dia(-8), 1, 'Factura A', 3, 20_480, 'Agro Insumos del Litoral S.R.L.', '30-71455667-9', 890_000, 186_900, 1_076_900);
-    comp.run('k3', 'c1', 'RECIBIDO', dia(-4), 1, 'Factura A', 12, 884_321, 'Transporte Andino S.A.', '30-68997744-4', 415_000, 87_150, 502_150);
-    comp.run('k4', 'c1', 'RECIBIDO', dia(-11), 3, 'Nota de Crédito A', 12, 884_190, 'Transporte Andino S.A.', '30-68997744-4', -62_000, -13_020, -75_020);
-    comp.run('k5', 'c2', 'EMITIDO', dia(-1), 6, 'Factura B', 7, 15_233, 'Consumidor Final', '—', 268_000, 56_280, 324_280);
-    comp.run('k6', 'c2', 'RECIBIDO', dia(-3), 1, 'Factura A', 4, 331_200, 'Combustibles Cuyo S.A.', '30-70554433-2', 1_890_000, 396_900, 2_286_900);
-    comp.run('k7', 'c3', 'EMITIDO', dia(-6), 11, 'Factura C', 1, 412, 'Estudio Jurídico Roldán', '30-71889900-8', 480_000, 0, 480_000);
+    comp.run('k1', 'c1', cuitDe('c1'), 'EMITIDO', dia(-2), 1, 'Factura A', 3, 20_481, 'Distribuidora Paraná S.A.', '30-70112233-6', 1_240_000, 260_400, 1_500_400);
+    comp.run('k2', 'c1', cuitDe('c1'), 'EMITIDO', dia(-8), 1, 'Factura A', 3, 20_480, 'Agro Insumos del Litoral S.R.L.', '30-71455667-9', 890_000, 186_900, 1_076_900);
+    comp.run('k3', 'c1', cuitDe('c1'), 'RECIBIDO', dia(-4), 1, 'Factura A', 12, 884_321, 'Transporte Andino S.A.', '30-68997744-4', 415_000, 87_150, 502_150);
+    comp.run('k4', 'c1', cuitDe('c1'), 'RECIBIDO', dia(-11), 3, 'Nota de Crédito A', 12, 884_190, 'Transporte Andino S.A.', '30-68997744-4', -62_000, -13_020, -75_020);
+    comp.run('k5', 'c2', cuitDe('c2'), 'EMITIDO', dia(-1), 6, 'Factura B', 7, 15_233, 'Consumidor Final', '—', 268_000, 56_280, 324_280);
+    comp.run('k6', 'c2', cuitDe('c2'), 'RECIBIDO', dia(-3), 1, 'Factura A', 4, 331_200, 'Combustibles Cuyo S.A.', '30-70554433-2', 1_890_000, 396_900, 2_286_900);
+    comp.run('k7', 'c3', cuitDe('c3'), 'EMITIDO', dia(-6), 11, 'Factura C', 1, 412, 'Estudio Jurídico Roldán', '30-71889900-8', 480_000, 0, 480_000);
 
     db.exec('COMMIT');
   } catch (e) {

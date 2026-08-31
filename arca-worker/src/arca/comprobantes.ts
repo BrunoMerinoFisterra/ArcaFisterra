@@ -29,6 +29,67 @@ export function formatearCuitArca(cuit: string): string {
 }
 
 /**
+ * Entra al servicio desde el portal y devuelve la pestaña donde quedó.
+ *
+ * Está extraído porque lo necesitan los dos caminos —enumerar contribuyentes y
+ * exportar—, y duplicar esta navegación significaría arreglar los selectores en
+ * dos lugares cuando ARCA cambie el HTML.
+ */
+async function abrirMisComprobantes(page: Page): Promise<Page> {
+  await page.goto(URLS.portal, { waitUntil: 'domcontentloaded' });
+
+  const buscador = await primerSelectorVisible(page, PORTAL.inputBuscar);
+  await page.fill(buscador.selector, MIS_COMPROBANTES.servicio);
+  await page.waitForTimeout(1_500);
+
+  const [popup] = await Promise.all([
+    page.context().waitForEvent('page', { timeout: 15_000 }).catch(() => null),
+    page.click(linkServicio(MIS_COMPROBANTES.servicio)),
+  ]);
+  const vista = popup ?? page;
+  await vista.waitForLoadState('domcontentloaded');
+
+  if (await algunoPresente(vista, MODAL_AGREGAR_SERVICIO.contenedor)) {
+    throw new ArcaError(
+      'SERVICIO_NO_ADHERIDO',
+      `el portal ofrecio agregar "${MIS_COMPROBANTES.servicio}"`,
+    );
+  }
+  return vista;
+}
+
+/** Abre el servicio y enumera los contribuyentes disponibles. */
+export async function listarContribuyentesDeComprobantes(page: Page): Promise<string[]> {
+  return listarContribuyentes(await abrirMisComprobantes(page));
+}
+
+/**
+ * CUITs por los que la clave fiscal puede actuar en Mis Comprobantes.
+ *
+ * Vacío cuando la pantalla de selección no aparece: ahí la clave representa a
+ * una sola persona y los comprobantes son los del propio cliente.
+ *
+ * Devuelve los CUITs y no los elementos a propósito. La selección posterior se
+ * hace por coincidencia EXACTA de CUIT, nunca por posición en la lista: si el
+ * orden cambiara entre la lectura y el clic, elegir por índice traería los
+ * comprobantes de otro contribuyente sin que nada fallara.
+ */
+export async function listarContribuyentes(vista: Page): Promise<string[]> {
+  if (!(await algunoPresente(vista, SELECCION_CONTRIBUYENTE.contenedor))) return [];
+
+  const textos = await vista
+    .locator(SELECCION_CONTRIBUYENTE.opciones)
+    .evaluateAll((elementos) => elementos.map((el) => el.textContent ?? ''));
+
+  const cuits = new Set<string>();
+  for (const texto of textos) {
+    const encontrado = texto.match(/\d{2}\D?\d{8}\D?\d/)?.[0]?.replace(/\D/g, '');
+    if (encontrado?.length === 11) cuits.add(encontrado);
+  }
+  return [...cuits];
+}
+
+/**
  * Mis Comprobantes muestra esta pantalla solo cuando el usuario puede actuar
  * por varias personas. Devuelve true cuando hizo falta elegir una.
  */
@@ -98,25 +159,7 @@ export async function exportarComprobantes(
   cuitCliente: string,
 ): Promise<string | null> {
   await mkdir(ARTIFACTS_DIR, { recursive: true });
-  await page.goto(URLS.portal, { waitUntil: 'domcontentloaded' });
-
-  const buscador = await primerSelectorVisible(page, PORTAL.inputBuscar);
-  await page.fill(buscador.selector, MIS_COMPROBANTES.servicio);
-  await page.waitForTimeout(1_500);
-
-  const [popup] = await Promise.all([
-    page.context().waitForEvent('page', { timeout: 15_000 }).catch(() => null),
-    page.click(linkServicio(MIS_COMPROBANTES.servicio)),
-  ]);
-  const vista = popup ?? page;
-  await vista.waitForLoadState('domcontentloaded');
-
-  if (await algunoPresente(vista, MODAL_AGREGAR_SERVICIO.contenedor)) {
-    throw new ArcaError(
-      'SERVICIO_NO_ADHERIDO',
-      `el portal ofrecio agregar "${MIS_COMPROBANTES.servicio}"`,
-    );
-  }
+  const vista = await abrirMisComprobantes(page);
 
   await seleccionarContribuyenteSiHaceFalta(vista, cuitCliente);
 
@@ -156,9 +199,12 @@ export async function exportarComprobantes(
       vista.click(csv.selector),
     ]);
 
+    // El CUIT va en el nombre: sin él, la exportación del segundo
+    // contribuyente pisaba la del primero y se guardaban dos veces los mismos
+    // comprobantes.
     const destino = join(
       ARTIFACTS_DIR,
-      `comprobantes_${tipo.toLowerCase()}_${rango.desde}_${rango.hasta}.csv`,
+      `comprobantes_${cuitCliente.replace(/\D/g, '')}_${tipo.toLowerCase()}_${rango.desde}_${rango.hasta}.csv`,
     );
     await download.saveAs(destino);
     return destino;

@@ -172,6 +172,11 @@ export type TipoComprobante = 'EMITIDO' | 'RECIBIDO';
 export interface Comprobante {
   id: string;
   clienteId: string;
+  /**
+   * CUIT del contribuyente que emitió o recibió el comprobante. No confundir
+   * con `cuitContraparte`, que es quién está del otro lado de la factura.
+   */
+  contribuyenteCuit: string;
   tipo: TipoComprobante;
   fecha: string;
   codigoComprobante: number;

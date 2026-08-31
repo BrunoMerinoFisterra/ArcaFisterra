@@ -477,7 +477,15 @@ export default function ClienteDetalle() {
         {!mensajeComprobantes && comprobantesAnio.length === 0 && (
           <p className="tenue">Sin comprobantes en el año actual.</p>
         )}
-        {comprobantesAnio.length > 0 && <TablaComprobantes comprobantes={comprobantesAnio} />}
+        {comprobantesAnio.length > 0 && (
+          <AgrupadosPorCuit
+            datos={comprobantesAnio}
+            etiqueta="comprobantes"
+            nombres={detalle.contribuyentes}
+            alGuardarNombre={ponerNombreContribuyente}
+            renderGrupo={(datos) => <TablaComprobantes comprobantes={datos} />}
+          />
+        )}
       </Seccion>
     </>
   );

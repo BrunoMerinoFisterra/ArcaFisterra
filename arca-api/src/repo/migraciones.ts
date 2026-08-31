@@ -11,6 +11,7 @@ export function prepararEsquemaSqlite(db: DatabaseSync, esquema: string): void {
   db.exec(esquema);
   asegurarColumnasUsuarios(db);
   migrarComprobantesConCodigo(db);
+  migrarComprobantesConContribuyente(db);
   migrarSaldosDetallados(db);
   migrarVencimientosDetallados(db);
   migrarSaldosConContribuyente(db);
@@ -65,6 +66,67 @@ export function prepararEsquemaSqlite(db: DatabaseSync, esquema: string): void {
     `INSERT OR IGNORE INTO arca_schema_migrations (version, aplicada_en)
      VALUES (10, ?)`,
   ).run(new Date().toISOString());
+}
+
+/**
+ * Agrega `contribuyente_cuit` a los comprobantes y lo mete en la unicidad.
+ *
+ * Hasta esta migracion Mis Comprobantes traia solo el CUIT del cliente, asi que
+ * todas las filas existentes son de ese contribuyente: el backfill sale del
+ * JOIN con arca_clientes, igual que en saldos y vencimientos.
+ *
+ * Va por reconstruccion porque cambia el UNIQUE, no solo agrega una columna.
+ */
+function migrarComprobantesConContribuyente(db: DatabaseSync): void {
+  const columnas = db.prepare('PRAGMA table_info(arca_comprobantes)').all() as Array<{
+    name: string;
+  }>;
+  if (columnas.length === 0) return;
+  if (columnas.some((columna) => columna.name === 'contribuyente_cuit')) return;
+
+  db.exec('PRAGMA foreign_keys = OFF');
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    db.exec(`
+      ALTER TABLE arca_comprobantes RENAME TO arca_comprobantes_sin_contribuyente;
+
+      CREATE TABLE arca_comprobantes (
+        id                TEXT PRIMARY KEY,
+        cliente_id        TEXT NOT NULL REFERENCES arca_clientes(id) ON DELETE CASCADE,
+        contribuyente_cuit TEXT NOT NULL,
+        tipo              TEXT NOT NULL CHECK (tipo IN ('EMITIDO', 'RECIBIDO')),
+        fecha             TEXT NOT NULL,
+        codigo_comprobante INTEGER NOT NULL,
+        tipo_comprobante  TEXT NOT NULL,
+        punto_venta       INTEGER NOT NULL,
+        numero            INTEGER NOT NULL,
+        contraparte       TEXT NOT NULL,
+        cuit_contraparte  TEXT NOT NULL,
+        neto              REAL NOT NULL,
+        iva               REAL NOT NULL,
+        total             REAL NOT NULL,
+        UNIQUE (cliente_id, contribuyente_cuit, tipo, codigo_comprobante, punto_venta, numero)
+      );
+
+      INSERT INTO arca_comprobantes
+        (id, cliente_id, contribuyente_cuit, tipo, fecha, codigo_comprobante,
+         tipo_comprobante, punto_venta, numero, contraparte, cuit_contraparte,
+         neto, iva, total)
+      SELECT v.id, v.cliente_id, c.cuit, v.tipo, v.fecha, v.codigo_comprobante,
+             v.tipo_comprobante, v.punto_venta, v.numero, v.contraparte,
+             v.cuit_contraparte, v.neto, v.iva, v.total
+        FROM arca_comprobantes_sin_contribuyente v
+        JOIN arca_clientes c ON c.id = v.cliente_id;
+
+      DROP TABLE arca_comprobantes_sin_contribuyente;
+      COMMIT;
+    `);
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  } finally {
+    db.exec('PRAGMA foreign_keys = ON');
+  }
 }
 
 function migrarSaldosConContribuyente(db: DatabaseSync): void {

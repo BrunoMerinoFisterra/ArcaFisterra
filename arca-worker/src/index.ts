@@ -10,7 +10,12 @@ import {
   identificadorAccesoArca,
   type AccesoArca,
 } from '../../arca-api/src/crypto/envelope.js';
-import { exportarComprobantes, type TipoConsultaComprobante } from './arca/comprobantes.js';
+import {
+  exportarComprobantes,
+  formatearCuitArca,
+  listarContribuyentesDeComprobantes,
+  type TipoConsultaComprobante,
+} from './arca/comprobantes.js';
 import { extraerPlanesFacilidades } from './arca/facilidades.js';
 import { extraerNotificacionesDfe } from './arca/domicilio-fiscal.js';
 import { extraerCuentasTributarias } from './arca/saldos.js';
@@ -313,19 +318,46 @@ async function procesarModulo(
   let insertados = 0;
   let repetidos = 0;
   const rangos = partirRangoParaArca(cargarRango());
-  for (const consulta of ['EMITIDOS', 'RECIBIDOS'] as const satisfies readonly TipoConsultaComprobante[]) {
-    for (const rango of rangos) {
-      console.log(`      exportando ${consulta.toLowerCase()} (${rango.desde} a ${rango.hasta})...`);
-      const pagina = sesion.page.isClosed()
-        ? (sesion.context.pages().find((p) => !p.isClosed()) ?? (await sesion.context.newPage()))
-        : sesion.page;
-      const archivo = await exportarComprobantes(pagina, rango, consulta, cliente.cuit);
-      if (!archivo) continue;
-      const tipo = consulta === 'EMITIDOS' ? 'EMITIDO' : 'RECIBIDO';
-      const comprobantes = await leerComprobantesDesdeArchivo(archivo, tipo);
-      const guardados = await repo.guardarComprobantes(cliente.id, comprobantes);
-      insertados += guardados.insertados;
-      repetidos += guardados.repetidos;
+  const paginaActual = () =>
+    sesion.page.isClosed()
+      ? (sesion.context.pages().find((p) => !p.isClosed()) ?? sesion.context.newPage())
+      : sesion.page;
+
+  // Una misma clave fiscal puede actuar por varios contribuyentes, igual que en
+  // Cuentas Tributarias. Si la pantalla de selección no aparece, la lista viene
+  // vacía y se sincroniza únicamente el CUIT del cliente.
+  const contribuyentes = await listarContribuyentesDeComprobantes(await paginaActual());
+  const aRecorrer = contribuyentes.length > 0 ? contribuyentes : [cliente.cuit];
+  if (contribuyentes.length > 1) {
+    console.log(`      ${contribuyentes.length} contribuyentes disponibles`);
+  }
+
+  for (const [indice, contribuyente] of aRecorrer.entries()) {
+    const contribuyenteCuit = formatearCuitArca(contribuyente);
+    if (aRecorrer.length > 1) {
+      console.log(`      CUIT ${indice + 1}/${aRecorrer.length}: ${contribuyenteCuit}`);
+    }
+    for (const consulta of ['EMITIDOS', 'RECIBIDOS'] as const satisfies readonly TipoConsultaComprobante[]) {
+      for (const rango of rangos) {
+        console.log(`        exportando ${consulta.toLowerCase()} (${rango.desde} a ${rango.hasta})...`);
+        const archivo = await exportarComprobantes(
+          await paginaActual(),
+          rango,
+          consulta,
+          contribuyenteCuit,
+        );
+        if (!archivo) continue;
+        const tipo = consulta === 'EMITIDOS' ? 'EMITIDO' : 'RECIBIDO';
+        const comprobantes = await leerComprobantesDesdeArchivo(archivo, tipo);
+        const guardados = await repo.guardarComprobantes(
+          cliente.id,
+          // El CUIT lo pone el worker y no el parser: el CSV de ARCA no lo
+          // trae, porque el portal ya sabe por quién estás consultando.
+          comprobantes.map((comprobante) => ({ ...comprobante, contribuyenteCuit })),
+        );
+        insertados += guardados.insertados;
+        repetidos += guardados.repetidos;
+      }
     }
   }
   console.log(`      ${insertados} nuevos, ${repetidos} ya existentes`);

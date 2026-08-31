@@ -103,12 +103,14 @@ export function rutasClientes(repo: Repositorio, config: Config): Router {
       repo.comprobantesDe(cliente.id),
     ]);
 
-    // Cuentas Tributarias agrupa por contribuyente y ARCA no informa el nombre,
-    // así que se resuelve acá para los CUITs que efectivamente aparecen.
+    // Cuentas Tributarias y Mis Comprobantes agrupan por contribuyente, y ARCA
+    // no informa el nombre en ninguno de los dos: se resuelve acá para los
+    // CUITs que efectivamente aparecen.
     const contribuyentes = await repo.nombresDeContribuyentes([
       ...saldos.map((s) => s.contribuyenteCuit),
       ...vencimientos.map((v) => v.contribuyenteCuit),
       ...ddjjPendientes.map((d) => d.contribuyenteCuit),
+      ...comprobantes.map((c) => c.contribuyenteCuit),
     ]);
 
     res.json({
