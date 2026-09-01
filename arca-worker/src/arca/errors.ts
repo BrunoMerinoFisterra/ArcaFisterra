@@ -116,6 +116,11 @@ const FRASES: ReadonlyArray<readonly [string, ArcaErrorCode]> = [
   ['la clave ingresada es incorrecta', 'CLAVE_INCORRECTA'],
   ['datos de acceso incorrectos', 'CLAVE_INCORRECTA'],
   ['numero de cuit incorrecto', 'CLAVE_INCORRECTA'],
+  // El cartel real del login rotula el campo "CUIL/CUIT", asi que la frase de
+  // arriba NO matchea: el `cuil/` queda en el medio. Sin esta entrada el error
+  // cae en DESCONOCIDO, la credencial sigue figurando OK y el panel deja
+  // reintentar un login que ya sabemos que no va a entrar.
+  ['numero de cuil/cuit incorrecto', 'CLAVE_INCORRECTA'],
 
   ['se encuentra bloqueada', 'CLAVE_BLOQUEADA'],
   ['clave bloqueada', 'CLAVE_BLOQUEADA'],
