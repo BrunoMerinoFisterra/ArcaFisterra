@@ -105,20 +105,16 @@ export default function Usuarios() {
                       </Badge>
                     </td>
                     <td className="der">
-                      {usuario.rol === 'user' ? (
-                        <button
-                          type="button"
-                          className="btn btn--chico"
-                          onClick={() => setExpandido(expandido === usuario.id ? null : usuario.id)}
-                        >
-                          {expandido === usuario.id ? 'Cerrar' : 'Gestionar'}
-                        </button>
-                      ) : (
-                        <span className="tenue">Cuenta protegida</span>
-                      )}
+                      <button
+                        type="button"
+                        className="btn btn--chico"
+                        onClick={() => setExpandido(expandido === usuario.id ? null : usuario.id)}
+                      >
+                        {expandido === usuario.id ? 'Cerrar' : 'Gestionar'}
+                      </button>
                     </td>
                   </tr>
-                  {expandido === usuario.id && usuario.rol === 'user' && (
+                  {expandido === usuario.id && (
                     <tr>
                       <td colSpan={5} className="panel-gestion">
                         <PanelUsuario
@@ -262,8 +258,21 @@ function PanelUsuario({
   const sinCupo =
     usuario.limiteClientes !== null && usuario.clientesAsignados >= usuario.limiteClientes;
 
+  // De una cuenta administradora sólo se gestionan las empresas. Nombre, cupo,
+  // contraseña y pausa los rechaza la API con 409 (PATCH /usuarios/:id), así
+  // que mostrar esos controles sería ofrecer botones que siempre fallan.
+  const esAdmin = usuario.rol === 'admin';
+
   return (
     <div className="gestion gestion--usuario">
+      {esAdmin && (
+        <p className="aviso">
+          De una cuenta administradora sólo se gestionan las empresas asignadas. Sus datos, su
+          contraseña y su estado se cambian desde la propia cuenta.
+        </p>
+      )}
+
+      {!esAdmin && (
       <div className="gestion__bloque">
         <h3>Datos y cupo</h3>
         <div className="fila-campos">
@@ -297,12 +306,14 @@ function PanelUsuario({
           </p>
         )}
       </div>
+      )}
 
       <div className="gestion__bloque gestion__bloque--clientes">
         <h3>Empresas asignadas ({usuario.clientes.length})</h3>
         <p className="tenue">
-          Sólo un administrador asigna o quita empresas. Esto evita que la cuenta reutilice el cupo
-          rotando clientes.
+          {esAdmin
+            ? 'Una misma empresa puede estar asignada a varias cuentas a la vez; cada una la ve con sus propios datos ya sincronizados.'
+            : 'Sólo un administrador asigna o quita empresas. Esto evita que la cuenta reutilice el cupo rotando clientes.'}
         </p>
 
         {sinCupo ? (
@@ -357,7 +368,11 @@ function PanelUsuario({
                     <td className="fuerte">{cliente.razonSocial}</td>
                     <td className="mono">{cliente.cuit}</td>
                     <td className="der">
-                      {clienteAConfirmar === cliente.id ? (
+                      {/* La baja de una cuenta administradora la rechaza la API
+                          (DELETE /usuarios/:id/clientes/:clienteId). */}
+                      {esAdmin ? (
+                        <span className="tenue">—</span>
+                      ) : clienteAConfirmar === cliente.id ? (
                         <div className="acciones acciones--compactas">
                           <button
                             type="button"
@@ -395,6 +410,7 @@ function PanelUsuario({
         )}
       </div>
 
+      {!esAdmin && (
       <div className="gestion__bloque">
         <h3>Restablecer contraseña</h3>
         <div className="fila-campos">
@@ -421,7 +437,9 @@ function PanelUsuario({
           </button>
         </div>
       </div>
+      )}
 
+      {!esAdmin && (
       <div className={`gestion__bloque${usuario.activo ? ' gestion__bloque--peligro' : ''}`}>
         <h3>{usuario.activo ? 'Pausar cuenta' : 'Reactivar cuenta'}</h3>
         <p className="tenue">
@@ -437,6 +455,7 @@ function PanelUsuario({
           {usuario.activo ? 'Pausar cuenta' : 'Reactivar cuenta'}
         </button>
       </div>
+      )}
     </div>
   );
 }
