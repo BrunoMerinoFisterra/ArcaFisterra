@@ -19,6 +19,7 @@ import {
 import { extraerPlanesFacilidades } from './arca/facilidades.js';
 import { extraerNotificacionesDfe } from './arca/domicilio-fiscal.js';
 import { extraerCuentasTributarias } from './arca/saldos.js';
+import { verificarAccesoAContribuyente } from './arca/verificar-acceso.js';
 import { ArcaError } from './arca/errors.js';
 import { login } from './arca/login.js';
 import { PORTAL, URLS } from './arca/selectors.js';
@@ -105,6 +106,14 @@ try {
 
 async function procesar(job: SyncJob, cfg: ConfigWorker, propietario: string): Promise<void> {
   console.log(`\n[job ${job.id}] cliente ${job.clienteId} — ${job.modulo}`);
+
+  // Va antes del chequeo de modulos: verificar una solicitud de acceso no
+  // sincroniza nada, no lee la credencial del cliente y no toca su estado.
+  if (job.solicitudId) {
+    await verificarSolicitud(job.id, job.solicitudId, cfg, propietario);
+    return;
+  }
+
   if (![...MODULOS_COMPLETOS, 'sincronizacion-completa'].includes(job.modulo)) {
     await repo.finalizarJob(job.id, {
       estado: 'ERROR',
@@ -244,6 +253,123 @@ async function procesar(job: SyncJob, cfg: ConfigWorker, propietario: string): P
   } finally {
     clearInterval(latido);
     acceso.clave = '';
+    await sesion?.cerrar();
+  }
+}
+
+/**
+ * Verifica una solicitud de acceso a una empresa que ya esta cargada.
+ *
+ * Tres reglas que no se pueden aflojar:
+ *
+ *  1. **Sesion nueva, sin `.sessions/`.** La sesion guardada del cliente es de
+ *     la credencial que ya estaba; reusarla aprobaria el pedido sin haber
+ *     probado la clave que mando quien lo pide.
+ *  2. **No se guarda el storage state.** Esta sesion es de otra cuenta ARCA y
+ *     pisaria la del cliente.
+ *  3. **No se propaga `estadoCredencial`.** Una clave equivocada de quien pide
+ *     acceso no puede marcar como invalida la credencial de la oficina que ya
+ *     tenia la empresa. `finalizarJob` ademas no toca al cliente en esta rama.
+ */
+async function verificarSolicitud(
+  jobId: string,
+  solicitudId: string,
+  cfg: ConfigWorker,
+  propietario: string,
+): Promise<void> {
+  const solicitud = await repo.solicitudParaVerificar(solicitudId);
+  if (!solicitud) {
+    await repo.finalizarJob(
+      jobId,
+      { estado: 'ERROR', detalle: 'La solicitud ya no esta pendiente.' },
+      propietario,
+    );
+    return;
+  }
+
+  let acceso: AccesoArca;
+  try {
+    acceso = descifrarAccesoArca(cfg.claveMaestra, solicitud.cifrada, solicitud.cuit);
+  } catch {
+    await repo.finalizarJob(
+      jobId,
+      { estado: 'ERROR', detalle: 'No se pudo descifrar la clave enviada con la solicitud.' },
+      propietario,
+    );
+    return;
+  }
+
+  const ahora = Date.now();
+  const bloqueoAdquirido = await repo.adquirirBloqueoCuenta(
+    jobId,
+    propietario,
+    identificadorAccesoArca(cfg.claveMaestra, acceso.usuarioCuit),
+    new Date(ahora).toISOString(),
+    new Date(ahora + cfg.leaseMs).toISOString(),
+  );
+  if (!bloqueoAdquirido) {
+    acceso.clave = '';
+    await repo.reencolarJob(
+      jobId,
+      propietario,
+      new Date(Date.now() + cfg.esperaCuentaMs).toISOString(),
+      'Esperando a que termine otra sincronizacion de esta cuenta ARCA',
+    );
+    console.log('  en espera — otra empresa usa la misma cuenta ARCA');
+    return;
+  }
+
+  let leasePerdido = false;
+  const latido = setInterval(() => {
+    void repo
+      .renovarLeaseJob(jobId, propietario, new Date(Date.now() + cfg.leaseMs).toISOString())
+      .then((renovado) => {
+        if (!renovado) leasePerdido = true;
+      })
+      .catch(() => {
+        leasePerdido = true;
+      });
+  }, cfg.heartbeatMs);
+
+  let sesion: SesionArca | undefined;
+  try {
+    console.log(`  verificando acceso a ${solicitud.cuit}...`);
+    sesion = await abrirSesion({ headed: cfg.headed });
+    await login(sesion.page, acceso.usuarioCuit, acceso.clave);
+    if (leasePerdido) throw new Error('El worker perdio la propiedad del trabajo.');
+
+    const veredicto = await verificarAccesoAContribuyente(
+      sesion.page,
+      acceso.usuarioCuit,
+      solicitud.cuit,
+    );
+    clearInterval(latido);
+    await repo.finalizarJob(
+      jobId,
+      veredicto.autorizado
+        ? { estado: 'DONE', detalle: veredicto.detalle }
+        : { estado: 'ERROR', detalle: veredicto.detalle },
+      propietario,
+    );
+    console.log(veredicto.autorizado ? `  OK — ${veredicto.detalle}` : `  RECHAZADA — ${veredicto.detalle}`);
+  } catch (error) {
+    if (sesion) {
+      const pagina = sesion.context.pages().find((p) => !p.isClosed());
+      if (pagina) await volcarEstado(pagina, `solicitud-${segmentoSeguro(solicitudId)}`);
+    }
+    const resultado = resultadoDeError(error);
+    clearInterval(latido);
+    // Sin `estadoCredencial`: no es la credencial de la empresa.
+    await repo.finalizarJob(
+      jobId,
+      { estado: resultado.estado, detalle: resultado.detalle ?? 'No se pudo verificar el acceso.' },
+      propietario,
+    );
+    console.error(`  FALLO — ${resultado.detalle}`);
+  } finally {
+    clearInterval(latido);
+    acceso.clave = '';
+    // Sin `storageState`: esta sesion es de otra cuenta ARCA.
     await sesion?.cerrar();
   }
 }

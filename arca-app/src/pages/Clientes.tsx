@@ -1,13 +1,21 @@
 import { Fragment, useEffect, useState, type FormEvent } from 'react';
 import {
   crearCliente,
+  ErrorApi,
   esperarJob,
+  esperarSolicitud,
   guardarCredencial,
   obtenerAdministracionClientes,
+  pedirAccesoAEmpresa,
   sincronizarCompleto,
   validarCuit,
 } from '../api/client';
-import type { AdministracionClientes, Cliente, SyncJob } from '../types';
+import type {
+  AdministracionClientes,
+  Cliente,
+  SolicitudAcceso,
+  SyncJob,
+} from '../types';
 import { desde } from '../lib/format';
 import { Badge, EstadoSyncBadge } from '../components/Badge';
 import { ModalCargando } from '../components/ModalCargando';
@@ -19,6 +27,8 @@ export default function Clientes() {
   const [expandido, setExpandido] = useState<string | null>(null);
   const [clienteSincronizando, setClienteSincronizando] = useState<Cliente | null>(null);
   const [jobSincronizando, setJobSincronizando] = useState<SyncJob | null>(null);
+  const [mensaje, setMensaje] = useState<string | null>(null);
+  const [verificando, setVerificando] = useState<SolicitudAcceso | null>(null);
 
   const recargar = () => obtenerAdministracionClientes().then(setAdministracion);
   useEffect(() => {
@@ -34,6 +44,42 @@ export default function Clientes() {
       await recargar();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Algo falló.');
+    }
+  }
+
+  /**
+   * Variante que RELANZA. El alta la necesita así: un CUIT ya cargado no es un
+   * final de camino sino un desvío, y el formulario tiene que poder verlo para
+   * ofrecer el pedido de acceso en vez de mostrar un cartel rojo y cerrarse.
+   */
+  async function accionRelanzando(fn: () => Promise<unknown>) {
+    setError(null);
+    try {
+      await fn();
+      await recargar();
+    } catch (e) {
+      if (e instanceof ErrorApi && e.codigo === 'CUIT_YA_CARGADO') throw e;
+      setError(e instanceof Error ? e.message : 'Algo falló.');
+    }
+  }
+
+  async function pedirAcceso(datos: { cuit: string; usuarioCuit: string; clave: string }) {
+    setError(null);
+    setMensaje(null);
+    try {
+      const { solicitud } = await pedirAccesoAEmpresa(datos);
+      setVerificando(solicitud);
+      const resuelta = await esperarSolicitud(solicitud.id, setVerificando);
+      await recargar();
+      if (resuelta.estado === 'APROBADA') {
+        setMensaje(`${resuelta.razonSocial} quedó agregada a tu cuenta.`);
+      } else {
+        setError(resuelta.detalle ?? 'ARCA no confirmó que esa clave pueda acceder a la empresa.');
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'No se pudo verificar el acceso.');
+    } finally {
+      setVerificando(null);
     }
   }
 
@@ -89,6 +135,13 @@ export default function Clientes() {
       </header>
 
       {error && <div className="aviso aviso--error">{error}</div>}
+      {mensaje && <div className="aviso aviso--ok">{mensaje}</div>}
+      {verificando && (
+        <div className="aviso" role="status">
+          <strong>Verificando tu acceso a {verificando.cuit} contra ARCA…</strong>
+          <span>Puede tardar un par de minutos. No cierres la página.</span>
+        </div>
+      )}
 
       {excedido && limiteClientes !== null && (
         <div className="aviso aviso--bloqueo" role="alert">
@@ -106,7 +159,8 @@ export default function Clientes() {
         <AltaCliente
           sinCupo={sinCupo}
           limite={limiteClientes}
-          onCrear={(datos) => accion(() => crearCliente(datos))}
+          onCrear={(datos) => accionRelanzando(() => crearCliente(datos))}
+          onPedirAcceso={pedirAcceso}
         />
       )}
 
@@ -186,28 +240,75 @@ export default function Clientes() {
 
 function AltaCliente({
   onCrear,
+  onPedirAcceso,
   sinCupo,
   limite,
 }: {
-  onCrear: (datos: { cuit: string; razonSocial: string }) => void;
+  onCrear: (datos: { cuit: string; razonSocial: string }) => Promise<void>;
+  onPedirAcceso: (datos: {
+    cuit: string;
+    usuarioCuit: string;
+    clave: string;
+  }) => Promise<void>;
   sinCupo: boolean;
   limite: number | null;
 }) {
   const [cuit, setCuit] = useState('');
   const [razonSocial, setRazonSocial] = useState('');
   const [abierto, setAbierto] = useState(false);
+  // Cuando el CUIT ya está cargado por otra cuenta, el alta no es el camino:
+  // el formulario pasa a pedir acceso con la clave fiscal propia.
+  const [yaCargado, setYaCargado] = useState<string | null>(null);
+  const [usuarioCuit, setUsuarioCuit] = useState('');
+  const [clave, setClave] = useState('');
+  const [enviando, setEnviando] = useState(false);
 
   // Se valida mientras escribe, pero el error solo aparece con 11 digitos:
   // marcar en rojo un CUIT a medio tipear es ruido.
   const problemaCuit = cuit.replace(/\D/g, '').length === 11 ? validarCuit(cuit) : null;
+  const problemaUsuarioCuit =
+    usuarioCuit.replace(/\D/g, '').length === 11 ? validarCuit(usuarioCuit) : null;
 
-  function onSubmit(e: FormEvent) {
-    e.preventDefault();
-    if (problemaCuit) return;
-    onCrear({ cuit, razonSocial });
+  function cerrar() {
     setCuit('');
     setRazonSocial('');
+    setUsuarioCuit('');
+    setClave('');
+    setYaCargado(null);
     setAbierto(false);
+  }
+
+  async function onSubmit(e: FormEvent) {
+    e.preventDefault();
+    if (problemaCuit || enviando) return;
+    setEnviando(true);
+    try {
+      await onCrear({ cuit, razonSocial });
+      cerrar();
+    } catch (error) {
+      // El único error que no cierra el formulario: hay una salida y es acá.
+      if (error instanceof ErrorApi && error.codigo === 'CUIT_YA_CARGADO') {
+        setYaCargado(error.message);
+        return;
+      }
+      throw error;
+    } finally {
+      setEnviando(false);
+    }
+  }
+
+  async function onSubmitAcceso(e: FormEvent) {
+    e.preventDefault();
+    if (problemaCuit || problemaUsuarioCuit || enviando) return;
+    setEnviando(true);
+    try {
+      await onPedirAcceso({ cuit, usuarioCuit, clave });
+      cerrar();
+    } finally {
+      // La clave no queda en memoria del componente ni siquiera si falla.
+      setClave('');
+      setEnviando(false);
+    }
   }
 
   if (!abierto) {
@@ -220,6 +321,56 @@ function AltaCliente({
       <button className="btn btn--primario btn--bloque" onClick={() => setAbierto(true)}>
         + Agregar cliente
       </button>
+    );
+  }
+
+  if (yaCargado) {
+    return (
+      <form className="seccion" onSubmit={onSubmitAcceso}>
+        <h2 className="seccion__titulo">Pedir acceso a {cuit}</h2>
+        <div className="aviso">
+          <strong>{yaCargado}</strong>
+          <span>
+            Para compartirla, ARCA tiene que confirmar que tu clave fiscal puede actuar por ese
+            CUIT. Se prueba una sola vez y no se guarda: la empresa conserva la clave que ya tenía
+            cargada.
+          </span>
+        </div>
+        <div className="fila-campos">
+          <label className="campo">
+            <span className="campo__etiqueta">Tu usuario ARCA (CUIT)</span>
+            <input
+              value={usuarioCuit}
+              onChange={(e) => setUsuarioCuit(e.target.value)}
+              placeholder="20-12345678-9"
+              required
+            />
+            <span className="campo__ayuda">Con el que iniciás sesión, que puede no ser el de la empresa.</span>
+            {problemaUsuarioCuit && <span className="campo__error">{problemaUsuarioCuit}</span>}
+          </label>
+          <label className="campo campo--ancho">
+            <span className="campo__etiqueta">Clave fiscal</span>
+            <input
+              type="password"
+              value={clave}
+              onChange={(e) => setClave(e.target.value)}
+              required
+            />
+          </label>
+        </div>
+        <div className="acciones">
+          <button
+            className="btn btn--primario"
+            type="submit"
+            disabled={enviando || Boolean(problemaUsuarioCuit)}
+          >
+            {enviando ? 'Verificando…' : 'Pedir acceso'}
+          </button>
+          <button className="btn" type="button" onClick={cerrar}>
+            Cancelar
+          </button>
+        </div>
+      </form>
     );
   }
 
@@ -249,10 +400,14 @@ function AltaCliente({
         </label>
       </div>
       <div className="acciones">
-        <button className="btn btn--primario" type="submit" disabled={Boolean(problemaCuit)}>
-          Crear
+        <button
+          className="btn btn--primario"
+          type="submit"
+          disabled={enviando || Boolean(problemaCuit)}
+        >
+          {enviando ? 'Creando…' : 'Crear'}
         </button>
-        <button className="btn" type="button" onClick={() => setAbierto(false)}>
+        <button className="btn" type="button" onClick={cerrar}>
           Cancelar
         </button>
       </div>

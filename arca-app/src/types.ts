@@ -59,6 +59,22 @@ export interface SyncJob {
   progresoActual: number;
   progresoTotal: number;
   pasoActual?: string;
+  /** Presente sólo en los jobs que verifican una solicitud de acceso. */
+  solicitudId?: string;
+}
+
+export type EstadoSolicitud = 'PENDIENTE' | 'APROBADA' | 'RECHAZADA';
+
+/** Pedido de acceso a una empresa que otra cuenta ya tiene cargada. */
+export interface SolicitudAcceso {
+  id: string;
+  clienteId: string;
+  cuit: string;
+  razonSocial: string;
+  estado: EstadoSolicitud;
+  detalle?: string;
+  creadoEn: string;
+  resueltoEn?: string;
 }
 
 export type EstadoNotificacion = 'LEIDA' | 'VISTA' | 'SIN_LEER';

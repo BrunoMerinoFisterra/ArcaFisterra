@@ -18,6 +18,12 @@ const esquemaCredencial = z.object({
   clave: z.string().min(1).max(200),
 });
 
+const esquemaSolicitud = z.object({
+  cuit: z.string().min(1),
+  usuarioCuit: z.string().min(1),
+  clave: z.string().min(1).max(200),
+});
+
 const esquemaLectura = z.object({ leido: z.boolean() });
 
 export function rutasClientes(repo: Repositorio, config: Config): Router {
@@ -90,6 +96,72 @@ export function rutasClientes(repo: Repositorio, config: Config): Router {
     res.json(resumenes.sort(porUrgencia));
   });
 
+  /**
+   * Pide acceso a una empresa que otra cuenta ya tiene cargada.
+   *
+   * Va ANTES de `/:id` a propósito: Express resuelve por orden de registro y
+   * `/solicitudes` matchearía como un id de cliente.
+   *
+   * No asigna nada acá. Deja la solicitud PENDIENTE y encola el job que la
+   * verifica contra ARCA con la clave fiscal que manda quien la pide. Esa
+   * prueba es lo único que separa "compartir una empresa entre dos oficinas"
+   * de "cualquiera lee la carpeta fiscal ajena escribiendo un CUIT público".
+   */
+  router.post('/solicitudes', async (req, res) => {
+    const usuario = usuarioDe(req);
+    const parseo = esquemaSolicitud.safeParse(req.body);
+    if (!parseo.success) {
+      throw new ErrorHttp(400, 'Faltan el CUIT de la empresa, el usuario ARCA o la clave.');
+    }
+
+    const problema = validarCuit(parseo.data.cuit);
+    if (problema) throw new ErrorHttp(400, problema);
+    const problemaUsuario = validarCuit(parseo.data.usuarioCuit);
+    if (problemaUsuario) throw new ErrorHttp(400, `Usuario ARCA: ${problemaUsuario}`);
+
+    // El cupo se controla igual que en el alta: sin esto, pedir acceso sería
+    // exactamente la forma de saltearlo.
+    if (usuario.limiteClientes !== null) {
+      const cantidad = await repo.cantidadClientesDe(usuario.id);
+      if (cantidad >= usuario.limiteClientes) {
+        throw new ErrorHttp(
+          409,
+          `Alcanzaste el límite de ${usuario.limiteClientes} clientes de tu cuenta.`,
+        );
+      }
+    }
+
+    const cifrada = cifrarAccesoArca(config.claveMaestra, {
+      usuarioCuit: parseo.data.usuarioCuit.replace(/\D/g, ''),
+      clave: parseo.data.clave,
+    });
+
+    const resultado = await repo.solicitarAcceso(
+      usuario.id,
+      formatearCuit(parseo.data.cuit),
+      cifrada,
+    );
+
+    if (resultado.estado === 'CLIENTE_INEXISTENTE') {
+      throw new ErrorHttp(404, 'No hay ninguna empresa cargada con ese CUIT.');
+    }
+    if (resultado.estado === 'YA_ASIGNADO') {
+      throw new ErrorHttp(409, 'Esa empresa ya está en tu cuenta.');
+    }
+    if (resultado.estado === 'YA_PENDIENTE') {
+      throw new ErrorHttp(
+        409,
+        'Ya hay un pedido en curso para esa empresa. Esperá a que termine antes de reintentar.',
+      );
+    }
+    res.status(202).json({ solicitud: resultado.solicitud, job: resultado.job });
+  });
+
+  /** Solicitudes propias, para que la pantalla siga el resultado. */
+  router.get('/solicitudes', async (req, res) => {
+    res.json(await repo.solicitudesDe(usuarioDe(req).id));
+  });
+
   router.get('/:id', async (req, res) => {
     const usuario = usuarioDe(req);
     const cliente = await clienteVisible(req.params['id'], usuario.id);
@@ -143,7 +215,14 @@ export function rutasClientes(repo: Repositorio, config: Config): Router {
 
     const cuit = formatearCuit(parseo.data.cuit);
     if (await repo.existeCuit(cuit)) {
-      throw new ErrorHttp(409, 'Ya existe un cliente con ese CUIT.');
+      // El código importa: el front lo usa para ofrecer el pedido de acceso en
+      // vez de dejar a la oficina sin salida. Sin él, "ya existe" era el final
+      // del camino aunque la empresa sí se pueda compartir.
+      throw new ErrorHttp(
+        409,
+        'Esa empresa ya está cargada en el sistema. Podés pedir acceso con tu clave fiscal.',
+        'CUIT_YA_CARGADO',
+      );
     }
 
     const cliente = await repo.crearCliente(

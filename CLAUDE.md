@@ -76,10 +76,10 @@ directo. Consecuencias:
 `obtenerCliente(id)` suelto. En SQLite eso se expresa como JOIN obligatorio con
 `arca_user_clientes`.
 
-Tres métodos son la excepción deliberada y **no deben ser alcanzables desde
-ninguna ruta HTTP**: `tomarProximoJob`, `recuperarJobsInterrumpidos`,
-`clienteParaSync` (más `leerCredencialCifrada`). Son del worker, que no actúa en
-nombre de un usuario.
+Unos pocos métodos son la excepción deliberada y **no deben ser alcanzables
+desde ninguna ruta HTTP**: `tomarProximoJob`, `recuperarJobsInterrumpidos`,
+`clienteParaSync`, `clientesParaSyncAutomatica` y `solicitudParaVerificar` (más
+`leerCredencialCifrada`). Son del worker, que no actúa en nombre de un usuario.
 
 Hay dos implementaciones — `memoria.ts` y `sqlite.ts` — y el test
 `src/http/aislamiento.test.ts` corre **contra las dos** vía la tabla `MOTORES`.
@@ -88,6 +88,44 @@ Al agregar un motor (p. ej. el `mssql.ts` pendiente) se suma ahí y queda cubier
 En las rutas, `clienteVisible()` en `rutas/clientes.ts` es la barrera: toda ruta
 con `:id` pasa por ella y devuelve 404 (no 403) para no confirmar que el id
 existe.
+
+### Compartir una empresa entre varias cuentas
+
+`arca_user_clientes` es muchos-a-muchos: la misma empresa puede estar asignada a
+N cuentas y cada una la ve con los datos ya sincronizados. Hay dos caminos, y la
+diferencia entre ellos es quién pone la prueba de que el acceso corresponde:
+
+- **Un admin la comparte** desde Gestión de cuentas → Gestionar → asignar
+  (`POST /usuarios/:id/clientes/:clienteId`). La cuenta destino puede ser
+  `admin`; el resto del panel de una cuenta admin sí está bloqueado porque
+  `PATCH /usuarios/:id` la rechaza con 409.
+- **La oficina la pide** con su propia clave fiscal
+  (`POST /clientes/solicitudes`). No otorga nada: deja una fila PENDIENTE en
+  `arca_solicitudes_acceso` y encola un job con `solicitud_id`. El worker hace
+  un login **con sesión nueva** y compara por coincidencia exacta de CUIT contra
+  `listarContribuyentes`. Recién ahí se crea la asignación.
+
+Reglas que sostienen esto y no hay que aflojar:
+
+- **La prueba no es opcional.** El CUIT de un contribuyente es público: sin
+  verificar la clave, escribirlo alcanzaría para leer la carpeta fiscal de la
+  cartera de otra oficina. Es la misma razón por la que `clienteVisible()`
+  devuelve 404.
+- **`finalizarJob` no toca al cliente cuando el job tiene `solicitud_id`.** Si
+  cayera en el `UPDATE arca_clientes`, una clave equivocada de quien pide acceso
+  dejaría marcada como `INVALIDA` la credencial de la oficina que ya tenía la
+  empresa. Mismo motivo para el guard de `tomarProximoJob`, que si no la pondría
+  en `SINCRONIZANDO`.
+- **La verificación nunca reusa `.sessions/`** ni guarda su storage state: esa
+  sesión es de la credencial que ya estaba cargada, así que reusarla aprobaría
+  el pedido sin haber probado nada.
+- **La credencial de la solicitud es de un solo uso**: se guarda cifrada con el
+  mismo envelope, se borra al resolver el pedido y *no* reemplaza a la de la
+  empresa. `arca_credenciales` tiene una sola clave por `cliente_id`; pisarla
+  rompería las sincronizaciones de quien la cargó.
+
+El índice `ux_jobs_cliente_modulo_activo` incluye `COALESCE(solicitud_id, '')`
+justamente para que dos oficinas pidiendo la misma empresa no choquen entre sí.
 
 ### Credenciales
 

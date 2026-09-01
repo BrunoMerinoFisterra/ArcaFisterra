@@ -8,6 +8,7 @@ import type {
   Notificacion,
   PlanPago,
   SaldoTributario,
+  SolicitudAcceso,
   SyncJob,
   UsuarioConHash,
   Vencimiento,
@@ -138,6 +139,9 @@ export async function crearRepositorioMemoria(): Promise<Repositorio> {
   ]);
 
   const credenciales = new Map<string, CredencialCifrada>();
+  /** Espeja arca_solicitudes_acceso, con la credencial de un solo uso aparte. */
+  const solicitudes: Array<SolicitudAcceso & { usuarioId: string }> = [];
+  const credencialesSolicitud = new Map<string, CredencialCifrada>();
   /** CUIT (11 dígitos, sin guiones) -> razón social cargada a mano. */
   const nombresContribuyentes = new Map<string, string>();
   const jobs: SyncJob[] = [];
@@ -426,6 +430,66 @@ export async function crearRepositorioMemoria(): Promise<Repositorio> {
       if (asignados.has(clienteId)) return 'YA_ASIGNADO';
       asignados.add(clienteId);
       return 'ASIGNADO';
+    },
+
+    async solicitarAcceso(usuarioId, cuit, cifrada) {
+      const cliente = clientes.find((candidato) => candidato.cuit === cuit);
+      if (!cliente) return { estado: 'CLIENTE_INEXISTENTE' as const };
+      if (asignaciones.get(usuarioId)?.has(cliente.id)) return { estado: 'YA_ASIGNADO' as const };
+
+      const pendiente = solicitudes.find(
+        (s) => s.usuarioId === usuarioId && s.clienteId === cliente.id && s.estado === 'PENDIENTE',
+      );
+      if (pendiente) return { estado: 'YA_PENDIENTE' as const, solicitud: pendiente };
+
+      const creadoEn = new Date().toISOString();
+      const solicitud = {
+        id: randomUUID(),
+        usuarioId,
+        clienteId: cliente.id,
+        cuit: cliente.cuit,
+        razonSocial: cliente.razonSocial,
+        estado: 'PENDIENTE' as const,
+        creadoEn,
+      };
+      solicitudes.push(solicitud);
+      credencialesSolicitud.set(solicitud.id, cifrada);
+
+      const job: SyncJob = {
+        id: randomUUID(),
+        clienteId: cliente.id,
+        modulo: 'verificar-acceso',
+        estado: 'PENDING',
+        intentos: 0,
+        creadoEn,
+        progresoActual: 0,
+        progresoTotal: 1,
+        pasoActual: 'En cola',
+        solicitudId: solicitud.id,
+      };
+      jobs.push(job);
+      // Igual que en sqlite: el cliente NO pasa a SINCRONIZANDO. La empresa es
+      // de otra oficina y su tablero no se mueve por un pedido de un tercero.
+      return { estado: 'ENCOLADA' as const, solicitud, job };
+    },
+
+    async solicitudesDe(usuarioId) {
+      return solicitudes
+        .filter((s) => s.usuarioId === usuarioId)
+        .sort((a, b) => b.creadoEn.localeCompare(a.creadoEn))
+        .map(({ usuarioId: _omitido, ...resto }) => resto);
+    },
+
+    async solicitudParaVerificar(solicitudId) {
+      const solicitud = solicitudes.find((s) => s.id === solicitudId && s.estado === 'PENDIENTE');
+      const cifrada = credencialesSolicitud.get(solicitudId);
+      if (!solicitud || !cifrada) return null;
+      return {
+        id: solicitud.id,
+        clienteId: solicitud.clienteId,
+        cuit: solicitud.cuit,
+        cifrada,
+      };
     },
 
     async eliminarClienteDe(usuarioId, clienteId) {
@@ -735,8 +799,12 @@ export async function crearRepositorioMemoria(): Promise<Repositorio> {
       propietariosJob.set(job.id, workerId);
       leasesJob.set(job.id, leaseHastaIso);
       disponiblesDesde.delete(job.id);
-      const cliente = buscarCliente(job.clienteId);
-      if (cliente) cliente.estadoSync = 'SINCRONIZANDO';
+      // Verificar una solicitud de acceso no es sincronizar: la empresa no se
+      // toca. Ver el mismo guard en sqlite.ts.
+      if (!job.solicitudId) {
+        const cliente = buscarCliente(job.clienteId);
+        if (cliente) cliente.estadoSync = 'SINCRONIZANDO';
+      }
       return job;
     },
 
@@ -840,6 +908,26 @@ export async function crearRepositorioMemoria(): Promise<Repositorio> {
       }
       if (resultado.detalle) job.error = resultado.detalle;
       else delete job.error;
+
+      // Un job de verificación resuelve su solicitud y NO toca al cliente: una
+      // clave equivocada de quien pide acceso no puede marcar como inválida la
+      // credencial de la oficina que ya tenía la empresa.
+      if (job.solicitudId) {
+        const solicitud = solicitudes.find((s) => s.id === job.solicitudId);
+        if (solicitud && solicitud.estado === 'PENDIENTE') {
+          solicitud.estado = resultado.estado === 'DONE' ? 'APROBADA' : 'RECHAZADA';
+          solicitud.resueltoEn = new Date().toISOString();
+          if (resultado.detalle) solicitud.detalle = resultado.detalle;
+          if (solicitud.estado === 'APROBADA') {
+            const asignados = asignaciones.get(solicitud.usuarioId) ?? new Set<string>();
+            asignaciones.set(solicitud.usuarioId, asignados);
+            asignados.add(solicitud.clienteId);
+          }
+        }
+        // La credencial adjunta es de un solo uso.
+        credencialesSolicitud.delete(job.solicitudId);
+        return;
+      }
 
       const cliente = buscarCliente(job.clienteId);
       if (!cliente) throw new Error(`cliente inexistente: ${job.clienteId}`);

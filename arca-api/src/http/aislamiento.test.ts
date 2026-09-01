@@ -332,6 +332,144 @@ for (const [motor, crearRepo] of MOTORES) {
       }
     });
 
+    test('escribir un CUIT ajeno no da acceso: hay que probar la clave fiscal', async () => {
+      const s = await levantar(crearRepo);
+      try {
+        const ayudante = await s.login('ayudante@fisterra.com');
+
+        // En la semilla, ayudante (u2) tiene c1 y c2, pero no c3.
+        assert.equal((await s.get('/clientes/c3', ayudante)).status, 404);
+
+        // El alta no es la via: avisa que ya esta cargada, con un codigo que
+        // el front usa para ofrecer el pedido de acceso.
+        const alta = await s.enviar('/clientes', 'POST', ayudante, {
+          cuit: '27-28456789-2',
+          razonSocial: 'La quiero igual',
+        });
+        assert.equal(alta.status, 409);
+        assert.equal((await alta.json() as { codigo?: string }).codigo, 'CUIT_YA_CARGADO');
+
+        const pedido = await s.enviar('/clientes/solicitudes', 'POST', ayudante, {
+          cuit: '27-28456789-2',
+          usuarioCuit: '20-12345678-6',
+          clave: 'la-mia',
+        });
+        assert.equal(pedido.status, 202);
+
+        // LO QUE IMPORTA: pedirlo no otorga nada. Sin esta linea, escribir un
+        // CUIT —que es publico— alcanzaria para leer la carpeta fiscal ajena.
+        assert.equal((await s.get('/clientes/c3', ayudante)).status, 404);
+
+        const solicitudes = (await (await s.get('/clientes/solicitudes', ayudante)).json()) as
+          Array<{ id: string; estado: string; cuit: string }>;
+        assert.equal(solicitudes.length, 1);
+        assert.equal(solicitudes[0]!.estado, 'PENDIENTE');
+
+        // Un pedido repetido no dispara un segundo login contra ARCA.
+        assert.equal(
+          (
+            await s.enviar('/clientes/solicitudes', 'POST', ayudante, {
+              cuit: '27-28456789-2',
+              usuarioCuit: '20-12345678-6',
+              clave: 'la-mia',
+            })
+          ).status,
+          409,
+        );
+
+        // Un CUIT valido pero no cargado no revela nada mas que eso.
+        assert.equal(
+          (
+            await s.enviar('/clientes/solicitudes', 'POST', ayudante, {
+              cuit: '33-69345023-9',
+              usuarioCuit: '20-12345678-6',
+              clave: 'la-mia',
+            })
+          ).status,
+          404,
+        );
+      } finally {
+        await s.cerrar();
+      }
+    });
+
+    test('el veredicto del worker otorga el acceso, y rechazarlo no daña a la empresa', async () => {
+      const s = await levantar(crearRepo);
+      try {
+        const ayudante = await s.login('ayudante@fisterra.com');
+        const admin = await s.login('bruno@fisterra.com');
+        const antes = (await (await s.get('/clientes/c3', admin)).json()) as {
+          cliente: { estadoCredencial: string; estadoSync: string };
+        };
+
+        assert.equal(
+          (
+            await s.enviar('/clientes/solicitudes', 'POST', ayudante, {
+              cuit: '27-28456789-2',
+              usuarioCuit: '20-12345678-6',
+              clave: 'la-que-no-va',
+            })
+          ).status,
+          202,
+        );
+
+        // El worker toma el job y ARCA le dice que no.
+        const ahora = new Date();
+        const rechazado = await s.repo.tomarProximoJob(
+          'worker-test',
+          ahora.toISOString(),
+          new Date(ahora.getTime() + 60_000).toISOString(),
+        );
+        assert.ok(rechazado?.solicitudId, 'el job de verificacion lleva la solicitud');
+        await s.repo.finalizarJob(
+          rechazado.id,
+          { estado: 'ERROR', detalle: 'ARCA no la incluye.', estadoCredencial: 'INVALIDA' },
+          'worker-test',
+        );
+
+        assert.equal((await s.get('/clientes/c3', ayudante)).status, 404);
+
+        // LO QUE IMPORTA: la empresa de la otra oficina queda intacta. Si el
+        // rechazo cayera en el UPDATE de cliente, una clave equivocada de un
+        // tercero dejaria la credencial marcada como invalida y le cortaria
+        // las sincronizaciones a quien si la tenia.
+        const despues = (await (await s.get('/clientes/c3', admin)).json()) as {
+          cliente: { estadoCredencial: string; estadoSync: string };
+        };
+        assert.equal(despues.cliente.estadoCredencial, antes.cliente.estadoCredencial);
+        assert.equal(despues.cliente.estadoSync, antes.cliente.estadoSync);
+
+        // Segundo intento, esta vez ARCA confirma.
+        assert.equal(
+          (
+            await s.enviar('/clientes/solicitudes', 'POST', ayudante, {
+              cuit: '27-28456789-2',
+              usuarioCuit: '20-12345678-6',
+              clave: 'la-buena',
+            })
+          ).status,
+          202,
+        );
+        const luego = new Date();
+        const aprobado = await s.repo.tomarProximoJob(
+          'worker-test',
+          luego.toISOString(),
+          new Date(luego.getTime() + 60_000).toISOString(),
+        );
+        assert.ok(aprobado?.solicitudId);
+        await s.repo.finalizarJob(aprobado.id, { estado: 'DONE' }, 'worker-test');
+
+        assert.equal((await s.get('/clientes/c3', ayudante)).status, 200);
+        // Compartida, no mudada: la oficina original la conserva.
+        assert.equal((await s.get('/clientes/c3', admin)).status, 200);
+
+        // La clave adjunta es de un solo uso y no sobrevive al veredicto.
+        assert.equal(await s.repo.solicitudParaVerificar(aprobado.solicitudId!), null);
+      } finally {
+        await s.cerrar();
+      }
+    });
+
     test('asignar respeta el cupo, igual que el alta', async () => {
       const s = await levantar(crearRepo);
       try {

@@ -9,6 +9,7 @@ import type {
   NotificacionAdjunto,
   PlanPago,
   SaldoTributario,
+  SolicitudAcceso,
   SyncJob,
   UsuarioConHash,
   UsuarioGestion,
@@ -59,6 +60,22 @@ export interface LecturaLocal {
 
 /** Resultado de asignar un cliente ya existente a otra cuenta. */
 export type ResultadoAsignacion = 'ASIGNADO' | 'YA_ASIGNADO' | 'CLIENTE_INEXISTENTE';
+
+/** Resultado de pedir acceso a una empresa que ya está cargada. */
+export type ResultadoSolicitud =
+  | { estado: 'ENCOLADA'; solicitud: SolicitudAcceso; job: SyncJob }
+  | { estado: 'CLIENTE_INEXISTENTE' }
+  | { estado: 'YA_ASIGNADO' }
+  | { estado: 'YA_PENDIENTE'; solicitud: SolicitudAcceso };
+
+/** Lo que el worker necesita para verificar una solicitud. */
+export interface SolicitudParaVerificar {
+  id: string;
+  clienteId: string;
+  /** CUIT del contribuyente por el que hay que poder actuar en ARCA. */
+  cuit: string;
+  cifrada: CredencialCifrada;
+}
 
 /**
  * Contrato de persistencia.
@@ -136,6 +153,27 @@ export interface Repositorio {
    * — que es justamente lo que esta interfaz evita a propósito.
    */
   asignarClienteA(usuarioId: string, clienteId: string): Promise<ResultadoAsignacion>;
+
+  /**
+   * Pide acceso a la empresa de ese CUIT adjuntando una clave fiscal cifrada.
+   *
+   * NO asigna nada: deja la solicitud PENDIENTE y encola el job que la
+   * verifica. El acceso se otorga recién cuando el worker prueba contra ARCA
+   * que esa clave entra y puede actuar por ese CUIT. Sin esa prueba, escribir
+   * un CUIT —que es público— alcanzaría para leer la carpeta fiscal de la
+   * cartera de otra oficina.
+   *
+   * Toma el CUIT y no un `clienteId` a propósito: quien pide acceso todavía no
+   * ve esa empresa, así que no tiene forma legítima de conocer su id.
+   */
+  solicitarAcceso(
+    usuarioId: string,
+    cuit: string,
+    cifrada: CredencialCifrada,
+  ): Promise<ResultadoSolicitud>;
+
+  /** Solicitudes propias, para que la pantalla siga el resultado. */
+  solicitudesDe(usuarioId: string): Promise<SolicitudAcceso[]>;
 
   /**
    * Guarda la credencial ya cifrada. El repositorio nunca ve la clave en claro:
@@ -245,11 +283,17 @@ export interface Repositorio {
 
   /* --- Cola: SOLO el worker --------------------------------------------
    *
-   * Estos tres metodos NO reciben usuarioId, a diferencia de todo el resto de
+   * Estos metodos NO reciben usuarioId, a diferencia de todo el resto de
    * la interfaz. Es deliberado: el worker no actua en nombre de un usuario,
    * corre la cola entera. Por eso mismo ninguna ruta HTTP puede llamarlos —
    * la misma regla que ya vale para `leerCredencialCifrada`.
    * ------------------------------------------------------------------- */
+
+  /**
+   * Solo para el worker. Devuelve la clave fiscal cifrada que acompaña a una
+   * solicitud de acceso. No debe existir ningun endpoint HTTP que llegue aca.
+   */
+  solicitudParaVerificar(solicitudId: string): Promise<SolicitudParaVerificar | null>;
 
   /**
    * Toma el proximo job pendiente y lo pasa a RUNNING, o null si no hay.

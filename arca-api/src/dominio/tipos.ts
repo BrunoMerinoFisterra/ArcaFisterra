@@ -217,6 +217,27 @@ export interface SyncJob {
   progresoActual: number;
   progresoTotal: number;
   pasoActual?: string;
+  /** Presente sólo en los jobs que verifican una solicitud de acceso. */
+  solicitudId?: string;
+}
+
+export type EstadoSolicitud = 'PENDIENTE' | 'APROBADA' | 'RECHAZADA';
+
+/**
+ * Pedido de acceso a una empresa que otra cuenta ya tiene cargada.
+ *
+ * Nunca lleva la credencial: la clave fiscal que se adjunta al pedirlo se
+ * guarda cifrada, la usa el worker una sola vez y se borra al resolverlo.
+ */
+export interface SolicitudAcceso {
+  id: string;
+  clienteId: string;
+  cuit: string;
+  razonSocial: string;
+  estado: EstadoSolicitud;
+  detalle?: string;
+  creadoEn: string;
+  resueltoEn?: string;
 }
 
 export interface DetalleCliente {

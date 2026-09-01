@@ -413,6 +413,13 @@ function asegurarColumnasJobs(db: DatabaseSync): void {
   if (!nombres.has('disponible_desde')) {
     db.exec('ALTER TABLE arca_sync_jobs ADD COLUMN disponible_desde TEXT');
   }
+  if (!nombres.has('solicitud_id')) {
+    // Sin REFERENCES: ALTER TABLE ADD COLUMN no admite una clave foranea con
+    // filas ya existentes. El borrado en cascada de las bases nuevas lo cubre
+    // el esquema; acá alcanza con que la columna exista y quede en NULL, que
+    // es lo que hace que el job siga siendo una sincronización comun.
+    db.exec('ALTER TABLE arca_sync_jobs ADD COLUMN solicitud_id TEXT');
+  }
   db.exec(`
     CREATE INDEX IF NOT EXISTS ix_jobs_disponibles
       ON arca_sync_jobs (estado, disponible_desde, creado_en)
@@ -500,7 +507,8 @@ function asegurarUnSoloJobActivo(db: DatabaseSync): void {
          SELECT id FROM (
            SELECT id,
                   ROW_NUMBER() OVER (
-                    PARTITION BY cliente_id, modulo ORDER BY creado_en, id
+                    PARTITION BY cliente_id, modulo, COALESCE(solicitud_id, '')
+                    ORDER BY creado_en, id
                   ) AS orden
              FROM arca_sync_jobs
             WHERE estado IN ('PENDING', 'RUNNING')
@@ -508,8 +516,16 @@ function asegurarUnSoloJobActivo(db: DatabaseSync): void {
          WHERE orden > 1
        );
 
+      -- El indice viejo era (cliente_id, modulo) a secas. Eso alcanzaba
+      -- mientras todos los jobs eran sincronizaciones, pero dos oficinas
+      -- distintas pidiendo acceso a la misma empresa generan dos jobs
+      -- 'verificar-acceso' del mismo cliente_id y chocaban entre si: la
+      -- segunda solicitud moria con un error de constraint. Agregar el
+      -- solicitud_id los separa sin aflojar la regla para el sync, donde la
+      -- columna es NULL y COALESCE la vuelve la cadena vacia para todos.
+      DROP INDEX IF EXISTS ux_jobs_cliente_modulo_activo;
       CREATE UNIQUE INDEX IF NOT EXISTS ux_jobs_cliente_modulo_activo
-        ON arca_sync_jobs (cliente_id, modulo)
+        ON arca_sync_jobs (cliente_id, modulo, COALESCE(solicitud_id, ''))
         WHERE estado IN ('PENDING', 'RUNNING');
       COMMIT;
     `);

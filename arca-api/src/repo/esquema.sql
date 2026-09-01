@@ -208,6 +208,40 @@ CREATE TABLE IF NOT EXISTS arca_comprobantes (
   UNIQUE (cliente_id, contribuyente_cuit, tipo, codigo_comprobante, punto_venta, numero)
 );
 
+-- Pedido de acceso a una empresa que YA esta cargada por otra cuenta.
+--
+-- El CUIT de un contribuyente es publico, asi que escribirlo no puede alcanzar
+-- para ver su informacion fiscal: quien lo pide adjunta su PROPIA clave fiscal
+-- y el worker la prueba contra ARCA. Solo si el login entra y ARCA lo deja
+-- actuar por ese CUIT se crea la fila en arca_user_clientes.
+--
+-- La credencial se guarda cifrada con el mismo envelope que las de los
+-- clientes, y se borra al resolver la solicitud: es material de un unico uso.
+-- No reemplaza a la credencial de la empresa, que sigue siendo la que ya
+-- estaba; pisarla romperia las sincronizaciones de la oficina que la cargo.
+CREATE TABLE IF NOT EXISTS arca_solicitudes_acceso (
+  id           TEXT PRIMARY KEY,
+  cliente_id   TEXT NOT NULL REFERENCES arca_clientes(id) ON DELETE CASCADE,
+  usuario_id   TEXT NOT NULL REFERENCES arca_users(id)    ON DELETE CASCADE,
+  estado       TEXT NOT NULL,
+  detalle      TEXT,
+  ciphertext   TEXT,
+  iv           TEXT,
+  auth_tag     TEXT,
+  dek_envuelta TEXT,
+  dek_iv       TEXT,
+  dek_auth_tag TEXT,
+  creado_en    TEXT NOT NULL,
+  resuelto_en  TEXT
+);
+
+-- Una sola solicitud viva por (cuenta, empresa). Sin esto, apretar dos veces
+-- el boton son dos logins simultaneos con la misma clave fiscal, que es
+-- exactamente lo que hace que ARCA bloquee la cuenta.
+CREATE UNIQUE INDEX IF NOT EXISTS ux_solicitud_acceso_activa
+  ON arca_solicitudes_acceso (cliente_id, usuario_id)
+  WHERE estado = 'PENDIENTE';
+
 CREATE TABLE IF NOT EXISTS arca_sync_jobs (
   id         TEXT PRIMARY KEY,
   cliente_id TEXT NOT NULL REFERENCES arca_clientes(id) ON DELETE CASCADE,
@@ -224,7 +258,12 @@ CREATE TABLE IF NOT EXISTS arca_sync_jobs (
   worker_id  TEXT,
   heartbeat_en TEXT,
   lease_hasta TEXT,
-  disponible_desde TEXT
+  disponible_desde TEXT,
+  -- Cuando viene cargada, el job NO es una sincronizacion: es la verificacion
+  -- de una solicitud de acceso. `finalizarJob` mira esta columna para no tocar
+  -- el estado del cliente, porque una clave equivocada de quien pide acceso no
+  -- puede marcar como invalida la credencial de la oficina que ya la tenia.
+  solicitud_id TEXT REFERENCES arca_solicitudes_acceso(id) ON DELETE CASCADE
 );
 
 -- Razon social de los contribuyentes que aparecen agrupados en Cuentas

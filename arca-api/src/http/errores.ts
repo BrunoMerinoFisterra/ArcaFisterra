@@ -5,6 +5,12 @@ export class ErrorHttp extends Error {
   constructor(
     readonly status: number,
     message: string,
+    /**
+     * Codigo estable para los pocos casos en que el front tiene que reaccionar
+     * distinto y no alcanza con el status. El mensaje es para la persona y
+     * puede reescribirse; esto no.
+     */
+    readonly codigo?: string,
   ) {
     super(message);
     this.name = 'ErrorHttp';
@@ -29,7 +35,9 @@ export function manejadorErrores(
   _next: NextFunction,
 ): void {
   if (err instanceof ErrorHttp) {
-    res.status(err.status).json({ error: err.message });
+    res.status(err.status).json(
+      err.codigo ? { error: err.message, codigo: err.codigo } : { error: err.message },
+    );
     return;
   }
 

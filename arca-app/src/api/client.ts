@@ -11,6 +11,7 @@ import type {
   DetalleCliente,
   Notificacion,
   ResumenCliente,
+  SolicitudAcceso,
   SyncJob,
   Usuario,
   UsuarioGestion,
@@ -23,6 +24,8 @@ export class ErrorApi extends Error {
   constructor(
     readonly status: number,
     mensaje: string,
+    /** Codigo estable de la API, cuando el status solo no alcanza. */
+    readonly codigo?: string,
   ) {
     super(mensaje);
     this.name = 'ErrorApi';
@@ -69,8 +72,11 @@ async function pedirRespuesta(ruta: string, opciones: RequestInit = {}): Promise
   }
 
   if (!res.ok) {
-    const cuerpo = (await res.json().catch(() => null)) as { error?: string } | null;
-    throw new ErrorApi(res.status, cuerpo?.error ?? `Error ${res.status}.`);
+    const cuerpo = (await res.json().catch(() => null)) as {
+      error?: string;
+      codigo?: string;
+    } | null;
+    throw new ErrorApi(res.status, cuerpo?.error ?? `Error ${res.status}.`, cuerpo?.codigo);
   }
 
   return res;
@@ -197,6 +203,49 @@ export function obtenerAdministracionClientes(): Promise<AdministracionClientes>
 
 export function crearCliente(datos: { cuit: string; razonSocial: string }): Promise<Cliente> {
   return pedir<Cliente>('/clientes', { method: 'POST', body: JSON.stringify(datos) });
+}
+
+/**
+ * Pide acceso a una empresa que otra cuenta ya tiene cargada.
+ *
+ * La clave viaja igual que en el alta de credenciales: se cifra en el servidor
+ * y no vuelve nunca. Acá no otorga nada — deja el pedido en cola para que el
+ * worker pruebe contra ARCA que esa clave puede actuar por ese CUIT.
+ */
+export function pedirAccesoAEmpresa(datos: {
+  cuit: string;
+  usuarioCuit: string;
+  clave: string;
+}): Promise<{ solicitud: SolicitudAcceso; job: SyncJob }> {
+  return pedir('/clientes/solicitudes', { method: 'POST', body: JSON.stringify(datos) });
+}
+
+export function listarSolicitudes(): Promise<SolicitudAcceso[]> {
+  return pedir<SolicitudAcceso[]>('/clientes/solicitudes');
+}
+
+/**
+ * Espera el veredicto del worker sobre un pedido de acceso.
+ *
+ * No usa `esperarJob`: seguir el job significa pedir `/clientes/:id/jobs`, y
+ * esa empresa todavía no está en la cuenta — la barrera multi-tenant responde
+ * 404, que es exactamente lo que tiene que hacer. La solicitud propia sí es
+ * visible, así que el estado se sigue por ahí.
+ */
+export async function esperarSolicitud(
+  solicitudId: string,
+  alActualizar?: (solicitud: SolicitudAcceso) => void,
+): Promise<SolicitudAcceso> {
+  const limite = Date.now() + 15 * 60_000;
+  while (Date.now() < limite) {
+    const solicitud = (await listarSolicitudes()).find(
+      (candidata) => candidata.id === solicitudId,
+    );
+    if (solicitud) alActualizar?.(solicitud);
+    if (solicitud && solicitud.estado !== 'PENDIENTE') return solicitud;
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
+  }
+  throw new Error('La verificación sigue en curso. Volvé a consultar en unos minutos.');
 }
 
 /** El acceso se manda y no vuelve nunca: no hay endpoint que lo devuelva. */

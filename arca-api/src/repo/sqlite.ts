@@ -16,6 +16,7 @@ import type {
   PlanPago,
   Rol,
   SaldoTributario,
+  SolicitudAcceso,
   SyncJob,
   UsuarioConHash,
   UsuarioGestion,
@@ -449,6 +450,166 @@ export function crearRepositorioSqlite(opciones: OpcionesSqlite): Repositorio & 
         db.exec('ROLLBACK');
         throw error;
       }
+    },
+
+    async solicitarAcceso(usuarioId, cuit, cifrada) {
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        const cliente = uno<{ id: string; cuit: string; razon_social: string }>(
+          'SELECT id, cuit, razon_social FROM arca_clientes WHERE cuit = ?',
+          cuit,
+        );
+        if (!cliente) {
+          db.exec('COMMIT');
+          return { estado: 'CLIENTE_INEXISTENTE' as const };
+        }
+
+        const yaAsignado = uno(
+          'SELECT 1 AS x FROM arca_user_clientes WHERE usuario_id = ? AND cliente_id = ?',
+          usuarioId,
+          cliente.id,
+        );
+        if (yaAsignado) {
+          db.exec('COMMIT');
+          return { estado: 'YA_ASIGNADO' as const };
+        }
+
+        const pendiente = uno<FilaSolicitud>(
+          `SELECT s.*, c.cuit, c.razon_social
+             FROM arca_solicitudes_acceso s
+             JOIN arca_clientes c ON c.id = s.cliente_id
+            WHERE s.usuario_id = ? AND s.cliente_id = ? AND s.estado = 'PENDIENTE'`,
+          usuarioId,
+          cliente.id,
+        );
+        if (pendiente) {
+          db.exec('COMMIT');
+          return { estado: 'YA_PENDIENTE' as const, solicitud: aSolicitud(pendiente) };
+        }
+
+        const id = randomUUID();
+        const creadoEn = new Date().toISOString();
+        correr(
+          `INSERT INTO arca_solicitudes_acceso
+             (id, cliente_id, usuario_id, estado, creado_en,
+              ciphertext, iv, auth_tag, dek_envuelta, dek_iv, dek_auth_tag)
+           VALUES (?, ?, ?, 'PENDIENTE', ?, ?, ?, ?, ?, ?, ?)`,
+          id,
+          cliente.id,
+          usuarioId,
+          creadoEn,
+          cifrada.ciphertext,
+          cifrada.iv,
+          cifrada.authTag,
+          cifrada.dekEnvuelta,
+          cifrada.dekIv,
+          cifrada.dekAuthTag,
+        );
+
+        const job: SyncJob = {
+          id: randomUUID(),
+          clienteId: cliente.id,
+          modulo: 'verificar-acceso',
+          estado: 'PENDING',
+          intentos: 0,
+          creadoEn,
+          progresoActual: 0,
+          progresoTotal: 1,
+          pasoActual: 'En cola',
+          solicitudId: id,
+        };
+        correr(
+          `INSERT INTO arca_sync_jobs
+             (id, cliente_id, modulo, estado, intentos, creado_en,
+              progreso_actual, progreso_total, paso_actual, solicitud_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          job.id,
+          job.clienteId,
+          job.modulo,
+          job.estado,
+          job.intentos,
+          job.creadoEn,
+          job.progresoActual,
+          job.progresoTotal,
+          job.pasoActual,
+          id,
+        );
+        // A diferencia de `encolarSync`, el cliente NO pasa a SINCRONIZANDO:
+        // esta empresa es de otra oficina y su tablero no tiene por qué
+        // moverse porque un tercero esté pidiendo acceso.
+        db.exec('COMMIT');
+        return {
+          estado: 'ENCOLADA' as const,
+          solicitud: {
+            id,
+            clienteId: cliente.id,
+            cuit: cliente.cuit,
+            razonSocial: cliente.razon_social,
+            estado: 'PENDIENTE' as const,
+            creadoEn,
+          },
+          job,
+        };
+      } catch (error) {
+        db.exec('ROLLBACK');
+        throw error;
+      }
+    },
+
+    async solicitudesDe(usuarioId) {
+      return todos<FilaSolicitud>(
+        `SELECT s.*, c.cuit, c.razon_social
+           FROM arca_solicitudes_acceso s
+           JOIN arca_clientes c ON c.id = s.cliente_id
+          WHERE s.usuario_id = ?
+          ORDER BY s.creado_en DESC`,
+        usuarioId,
+      ).map(aSolicitud);
+    },
+
+    async solicitudParaVerificar(solicitudId) {
+      const f = uno<{
+        id: string;
+        cliente_id: string;
+        cuit: string;
+        ciphertext: string | null;
+        iv: string | null;
+        auth_tag: string | null;
+        dek_envuelta: string | null;
+        dek_iv: string | null;
+        dek_auth_tag: string | null;
+      }>(
+        `SELECT s.id, s.cliente_id, c.cuit,
+                s.ciphertext, s.iv, s.auth_tag, s.dek_envuelta, s.dek_iv, s.dek_auth_tag
+           FROM arca_solicitudes_acceso s
+           JOIN arca_clientes c ON c.id = s.cliente_id
+          WHERE s.id = ? AND s.estado = 'PENDIENTE'`,
+        solicitudId,
+      );
+      if (
+        !f ||
+        f.ciphertext === null ||
+        f.iv === null ||
+        f.auth_tag === null ||
+        f.dek_envuelta === null ||
+        f.dek_iv === null ||
+        f.dek_auth_tag === null
+      ) {
+        return null;
+      }
+      return {
+        id: f.id,
+        clienteId: f.cliente_id,
+        cuit: f.cuit,
+        cifrada: {
+          ciphertext: f.ciphertext,
+          iv: f.iv,
+          authTag: f.auth_tag,
+          dekEnvuelta: f.dek_envuelta,
+          dekIv: f.dek_iv,
+          dekAuthTag: f.dek_auth_tag,
+        },
+      };
     },
 
     async eliminarClienteDe(usuarioId, clienteId) {
@@ -1251,6 +1412,7 @@ export function crearRepositorioSqlite(opciones: OpcionesSqlite): Repositorio & 
           progreso_total: number;
           paso_actual: string | null;
           error: string | null;
+          solicitud_id: string | null;
         }>(
           `SELECT * FROM arca_sync_jobs
             WHERE estado = 'PENDING'
@@ -1276,7 +1438,15 @@ export function crearRepositorioSqlite(opciones: OpcionesSqlite): Repositorio & 
           leaseHastaIso,
           f.id,
         );
-        correr(`UPDATE arca_clientes SET estado_sync = 'SINCRONIZANDO' WHERE id = ?`, f.cliente_id);
+        // Verificar una solicitud de acceso no es sincronizar: la empresa no
+        // se toca. Si se marcara SINCRONIZANDO, la oficina que ya la tiene
+        // vería su tablero moverse por un pedido de un tercero.
+        if (!f.solicitud_id) {
+          correr(
+            `UPDATE arca_clientes SET estado_sync = 'SINCRONIZANDO' WHERE id = ?`,
+            f.cliente_id,
+          );
+        }
         db.exec('COMMIT');
         return {
           ...aSyncJob(f),
@@ -1448,8 +1618,8 @@ export function crearRepositorioSqlite(opciones: OpcionesSqlite): Repositorio & 
     },
 
     async finalizarJob(jobId, r, workerId) {
-      const job = uno<{ cliente_id: string }>(
-        'SELECT cliente_id FROM arca_sync_jobs WHERE id = ?',
+      const job = uno<{ cliente_id: string; solicitud_id: string | null }>(
+        'SELECT cliente_id, solicitud_id FROM arca_sync_jobs WHERE id = ?',
         jobId,
       );
       if (!job) throw new Error(`job inexistente: ${jobId}`);
@@ -1478,6 +1648,44 @@ export function crearRepositorioSqlite(opciones: OpcionesSqlite): Repositorio & 
         );
         if (Number(actualizado.changes) !== 1) throw new Error(`no se pudo cerrar el job ${jobId}`);
         correr('DELETE FROM arca_sync_locks WHERE job_id = ?', jobId);
+
+        // Un job de verificación resuelve su solicitud y NO toca al cliente.
+        //
+        // Esta rama es la garantía de seguridad de toda la función: si cayera
+        // en el UPDATE de abajo, una clave equivocada de quien pide acceso
+        // dejaría marcada como INVALIDA la credencial de la oficina que ya
+        // tenía la empresa, y le cortaría las sincronizaciones.
+        if (job.solicitud_id) {
+          const aprobada = r.estado === 'DONE';
+          correr(
+            `UPDATE arca_solicitudes_acceso
+                SET estado = ?, detalle = ?, resuelto_en = ?,
+                    ciphertext = NULL, iv = NULL, auth_tag = NULL,
+                    dek_envuelta = NULL, dek_iv = NULL, dek_auth_tag = NULL
+              WHERE id = ? AND estado = 'PENDIENTE'`,
+            aprobada ? 'APROBADA' : 'RECHAZADA',
+            r.detalle ?? null,
+            new Date().toISOString(),
+            job.solicitud_id,
+          );
+          if (aprobada) {
+            const solicitud = uno<{ usuario_id: string; cliente_id: string }>(
+              'SELECT usuario_id, cliente_id FROM arca_solicitudes_acceso WHERE id = ?',
+              job.solicitud_id,
+            );
+            if (solicitud) {
+              correr(
+                `INSERT OR IGNORE INTO arca_user_clientes (usuario_id, cliente_id)
+                 VALUES (?, ?)`,
+                solicitud.usuario_id,
+                solicitud.cliente_id,
+              );
+            }
+          }
+          db.exec('COMMIT');
+          return;
+        }
+
         correr(
           `UPDATE arca_clientes
               SET estado_sync = ?,
@@ -1634,6 +1842,31 @@ function sembrarSiVacia(db: DatabaseSync): void {
   }
 }
 
+interface FilaSolicitud {
+  id: string;
+  cliente_id: string;
+  cuit: string;
+  razon_social: string;
+  estado: string;
+  detalle: string | null;
+  creado_en: string;
+  resuelto_en: string | null;
+}
+
+function aSolicitud(f: FilaSolicitud): SolicitudAcceso {
+  const solicitud: SolicitudAcceso = {
+    id: f.id,
+    clienteId: f.cliente_id,
+    cuit: f.cuit,
+    razonSocial: f.razon_social,
+    estado: f.estado as SolicitudAcceso['estado'],
+    creadoEn: f.creado_en,
+  };
+  if (f.detalle) solicitud.detalle = f.detalle;
+  if (f.resuelto_en) solicitud.resueltoEn = f.resuelto_en;
+  return solicitud;
+}
+
 function aSyncJob(f: {
   id: string;
   cliente_id: string;
@@ -1647,6 +1880,7 @@ function aSyncJob(f: {
   progreso_total: number;
   paso_actual?: string | null;
   error: string | null;
+  solicitud_id?: string | null;
 }): SyncJob {
   const job: SyncJob = {
     id: f.id,
@@ -1662,5 +1896,6 @@ function aSyncJob(f: {
   if (f.finalizado_en) job.finalizadoEn = f.finalizado_en;
   if (f.error) job.error = f.error;
   if (f.paso_actual) job.pasoActual = f.paso_actual;
+  if (f.solicitud_id) job.solicitudId = f.solicitud_id;
   return job;
 }
