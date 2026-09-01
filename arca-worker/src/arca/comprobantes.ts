@@ -123,6 +123,9 @@ function aDdMmAaaa(iso: string): string {
   return `${partes[3]}/${partes[2]}/${partes[1]}`;
 }
 
+/** Cuanto se espera a que ARCA termine de enganchar el daterangepicker. */
+const ESPERA_PICKER_MS = 30_000;
+
 async function setearRangoFechas(
   vista: Page,
   selector: string,
@@ -130,6 +133,32 @@ async function setearRangoFechas(
 ): Promise<string> {
   const desde = aDdMmAaaa(rango.desde);
   const hasta = aDdMmAaaa(rango.hasta);
+
+  // Que el input sea VISIBLE no significa que ya tenga el picker.
+  //
+  // `primerSelectorVisible` espera una condicion de CSS, que se cumple apenas
+  // se renderiza el HTML. El `$(selector).daterangepicker({...})` lo corre un
+  // script externo despues — no hay ningun `document.ready` inline en la
+  // pagina — asi que leer `.data('daterangepicker')` de una salia null cuando
+  // el portal tardaba, y el job moria con "el input no tiene daterangepicker
+  // asociado" por una carrera, no porque ARCA hubiera cambiado.
+  try {
+    await vista.waitForFunction(
+      (selector) => {
+        const jq = (window as unknown as { jQuery?: any }).jQuery;
+        return Boolean(jq && jq(selector).data('daterangepicker'));
+      },
+      selector,
+      { timeout: ESPERA_PICKER_MS },
+    );
+  } catch {
+    // Agotada la espera si es un cambio del portal, y ahi el reintento no
+    // sirve: la reaccion tiene que ser revisar los selectores.
+    throw new ArcaError(
+      'SELECTOR_NO_ENCONTRADO',
+      `${selector} nunca recibio el daterangepicker (${ESPERA_PICKER_MS} ms)`,
+    );
+  }
 
   await vista.evaluate(
     ({ selector, desde, hasta }) => {
@@ -145,6 +174,8 @@ async function setearRangoFechas(
     { selector, desde, hasta },
   );
 
+  // El valor leido es la confirmacion de que la fecha entro donde debia: si el
+  // picker la rechaza o la reformatea, el llamador lo ve en el log.
   return vista.inputValue(selector);
 }
 
