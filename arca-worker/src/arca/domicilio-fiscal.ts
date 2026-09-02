@@ -261,48 +261,60 @@ function numeroSeguro(valor: unknown): number {
  * VISUALIZAR podría abrir comunicaciones y alterar su estado, por lo que el
  * worker no lo toca bajo ninguna condición.
  */
-async function cerrarAvisosDfe(
+/**
+ * Los avisos que sabemos despedir, identificados por una frase que aparece en
+ * uno solo de ellos: el introductorio habla de `"notificadas de oficio"`, nunca
+ * de `"Notificaciones de oficio"`, asi que los textos no se pisan.
+ *
+ * El boton es siempre la accion pasiva. En el de oficio eso es CERRAR y jamas
+ * VISUALIZAR, que abriria la comunicacion en ARCA y la perfeccionaria.
+ */
+const AVISOS_DFE = [
+  {
+    frase: 'Notificaciones de oficio',
+    boton: /^cerrar$/i,
+    sinBoton: 'El aviso de Notificaciones de oficio no ofreció un único botón CERRAR',
+    nota: 'aviso de notificaciones de oficio cerrado sin visualizar',
+  },
+  {
+    frase: 'Domicilio Fiscal Electronico',
+    boton: /^recordar más tarde$/i,
+    sinBoton: 'El aviso introductorio del DFE no ofreció RECORDAR MÁS TARDE',
+    nota: 'aviso introductorio del DFE cerrado',
+  },
+] as const;
+
+export async function cerrarAvisosDfe(
   vista: Page,
   esperarHastaMs = 0,
 ): Promise<boolean> {
   const limite = Date.now() + esperarHastaMs;
   let cerrado = false;
   do {
-    const introductorio = vista
-      .locator('.modal.show')
-      .filter({ hasText: 'Domicilio Fiscal Electronico' });
-    if (
-      (await introductorio.count()) === 1 &&
-      (await introductorio.isVisible().catch(() => false))
-    ) {
-      const recordar = introductorio.getByRole('button', { name: /^recordar más tarde$/i });
-      if ((await recordar.count()) !== 1) {
-        throw new ArcaError(
-          'SELECTOR_NO_ENCONTRADO',
-          'El aviso introductorio del DFE no ofreció RECORDAR MÁS TARDE',
-        );
-      }
-      await recordar.click();
-      await introductorio.waitFor({ state: 'hidden', timeout: 10_000 });
-      cerrado = true;
-      console.log('      aviso introductorio del DFE cerrado');
-      continue;
-    }
+    // Se cierra SIEMPRE el de mas arriba, que es el ultimo del DOM: cada modal
+    // dibuja su backdrop encima de los anteriores. Cuando ARCA los abre a la
+    // vez —pasa cuando hay comunicaciones de oficio sin leer— ir por el de
+    // abajo primero deja el click interceptado por ese backdrop, y Playwright
+    // espera a que el boton sea accionable hasta agotar el timeout del
+    // contexto. Eso llegaba al contador como "el portal tardo demasiado".
+    const abiertos = vista.locator('.modal.show');
+    const total = await abiertos.count();
+    const cima = total > 0 ? abiertos.nth(total - 1) : null;
 
-    const modal = vista.locator('.modal.show').filter({ hasText: 'Notificaciones de oficio' });
-    if ((await modal.count()) === 1 && (await modal.isVisible().catch(() => false))) {
-      const cerrar = modal.getByRole('button', { name: /^cerrar$/i });
-      if ((await cerrar.count()) !== 1) {
-        throw new ArcaError(
-          'SELECTOR_NO_ENCONTRADO',
-          'El aviso de Notificaciones de oficio no ofreció un único botón CERRAR',
-        );
+    if (cima && (await cima.isVisible().catch(() => false))) {
+      const texto = (await cima.textContent().catch(() => '')) ?? '';
+      const aviso = AVISOS_DFE.find((candidato) => texto.includes(candidato.frase));
+      if (aviso) {
+        const boton = cima.getByRole('button', { name: aviso.boton });
+        if ((await boton.count()) !== 1) {
+          throw new ArcaError('SELECTOR_NO_ENCONTRADO', aviso.sinBoton);
+        }
+        await boton.click();
+        await cima.waitFor({ state: 'hidden', timeout: 10_000 });
+        cerrado = true;
+        console.log(`      ${aviso.nota}`);
+        continue;
       }
-      await cerrar.click();
-      await modal.waitFor({ state: 'hidden', timeout: 10_000 });
-      cerrado = true;
-      console.log('      aviso de notificaciones de oficio cerrado sin visualizar');
-      continue;
     }
     if (Date.now() >= limite) break;
     await vista.waitForTimeout(100);
