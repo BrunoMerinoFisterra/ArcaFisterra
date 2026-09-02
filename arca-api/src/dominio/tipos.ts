@@ -55,9 +55,39 @@ export interface NotificacionAdjunto {
   tamano: number;
 }
 
+/**
+ * Una empresa por la que una cuenta puede actuar en ARCA.
+ *
+ * Es la fila del panel principal y la unidad en la que el usuario entra. NO es
+ * un cliente de la app: no se da de alta, no consume cupo y no se asigna a
+ * usuarios por separado — todo eso sigue colgando de la cuenta (`Cliente`).
+ *
+ * Si dos cuentas representan a la misma empresa aparecen dos filas, cada una
+ * con su representante. Es a propósito: los datos que se ven son los que bajó
+ * ESA cuenta, y fundirlas obligaría a elegir de cuál mostrar.
+ */
+export interface EmpresaRepresentada {
+  /** La cuenta que la representa. */
+  clienteId: string;
+  cuit: string;
+  /** Razón social resuelta del padrón; el CUIT si todavía no se conoce. */
+  nombre: string;
+  /** Datos de la cuenta, para mostrar el representante al lado. */
+  representante: {
+    cuit: string;
+    razonSocial: string;
+  };
+  /** True cuando la empresa ES la titular de la cuenta y no una representada. */
+  esTitular: boolean;
+  /** Último servicio de ARCA donde se la vio ofrecida. */
+  vistoEn: string;
+}
+
 export interface Notificacion {
   id: string;
   clienteId: string;
+  /** De qué empresa es el buzón. Una clave fiscal representa a varias. */
+  contribuyenteCuit: string;
   idComunicacion: string;
   fecha: string;
   organismo: string;
@@ -95,6 +125,8 @@ export interface SaldoTributario {
 export interface PlanPago {
   id: string;
   clienteId: string;
+  /** De qué empresa es el plan. Ver el comentario de `Notificacion`. */
+  contribuyenteCuit: string;
   numero: string;
   concepto: string;
   fechaPresentacion: string | null;
@@ -219,6 +251,11 @@ export interface SyncJob {
   pasoActual?: string;
   /** Presente sólo en los jobs que verifican una solicitud de acceso. */
   solicitudId?: string;
+  /**
+   * Empresa a la que apunta el job. Ausente = la cuenta entera, con todos sus
+   * representados en una sola pasada por servicio.
+   */
+  contribuyenteCuit?: string;
 }
 
 export type EstadoSolicitud = 'PENDIENTE' | 'APROBADA' | 'RECHAZADA';

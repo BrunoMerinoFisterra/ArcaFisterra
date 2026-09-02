@@ -13,6 +13,7 @@
     "spike:facilidades": "tsx scripts/spike-facilidades.ts",
     "spike:dfe": "tsx scripts/spike-dfe.ts",
     "spike:saldos": "tsx scripts/spike-saldos.ts",
+    "spike:representados": "tsx scripts/spike-representados.ts",
     "probe": "tsx scripts/probe-selectors.ts",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test src/**/*.test.ts",

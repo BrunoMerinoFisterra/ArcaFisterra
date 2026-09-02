@@ -86,9 +86,30 @@ export interface NotificacionAdjunto {
   tamano: number;
 }
 
+/**
+ * Una empresa por la que una cuenta puede actuar en ARCA.
+ *
+ * Es la fila del panel principal. NO es un cliente de la app: no se da de alta
+ * ni consume cupo — la cuenta (`Cliente`) sigue siendo la unidad de credencial.
+ * Si dos cuentas representan a la misma empresa, aparecen dos filas.
+ */
+export interface EmpresaRepresentada {
+  clienteId: string;
+  cuit: string;
+  nombre: string;
+  representante: {
+    cuit: string;
+    razonSocial: string;
+  };
+  esTitular: boolean;
+  vistoEn: string;
+}
+
 export interface Notificacion {
   id: string;
   clienteId: string;
+  /** De que empresa es el buzon. Una clave fiscal representa a varias. */
+  contribuyenteCuit: string;
   idComunicacion: string;
   fecha: string;
   organismo: string;
@@ -124,6 +145,8 @@ export interface SaldoTributario {
 export interface PlanPago {
   id: string;
   clienteId: string;
+  /** De que empresa es el plan. */
+  contribuyenteCuit: string;
   numero: string;
   concepto: string;
   fechaPresentacion: string | null;

@@ -6,6 +6,7 @@ test('actualiza notificaciones por id de comunicación sin duplicarlas', async (
   const repo = crearRepositorioSqlite({ archivo: ':memory:' });
   try {
     const inicial = {
+      contribuyenteCuit: '30-71234567-1',
       idComunicacion: '659513833',
       fecha: '2026-07-06',
       organismo: 'ARCA',
@@ -35,6 +36,7 @@ test('conserva por separado lectura ARCA, vista local, cuerpo y adjuntos', async
   const repo = crearRepositorioSqlite({ archivo: ':memory:' });
   try {
     const base = {
+      contribuyenteCuit: '30-71234567-1',
       idComunicacion: 'DFE-DETALLE-1',
       fecha: '2026-08-05',
       organismo: 'ARCA',

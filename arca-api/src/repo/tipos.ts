@@ -4,6 +4,7 @@ import type {
   Comprobante,
   CuotaPlan,
   DeclaracionJuradaPendiente,
+  EmpresaRepresentada,
   EstadoCredencial,
   Notificacion,
   NotificacionAdjunto,
@@ -28,6 +29,14 @@ export interface NotificacionAdjuntoNuevo {
 }
 
 export interface NotificacionNueva {
+  /**
+   * De qué empresa es la comunicación.
+   *
+   * Lo resuelve el worker: la grilla de "Todos tus representados" trae la razón
+   * social, y el CUIT sale de cruzarla contra el propio dropdown de
+   * representados de esa misma pantalla.
+   */
+  contribuyenteCuit: string;
   idComunicacion: string;
   fecha: string;
   organismo: string;
@@ -218,8 +227,45 @@ export interface Repositorio {
    */
   leerCredencialCifrada(clienteId: string): Promise<CredencialCifrada | null>;
 
+  /* --- Empresas representadas --- */
+
+  /**
+   * Las empresas por las que esta cuenta puede actuar, incluida la titular.
+   *
+   * Es lo que arma el panel principal. Sale de `arca_representados`, que llena
+   * el worker con lo que ARCA ofrece en cada servicio — y no de los datos ya
+   * bajados, porque asi una empresa sin movimientos igual aparece, y una cuenta
+   * recien cargada no se ve vacia hasta la primera sincronizacion.
+   */
+  empresasDe(clienteId: string): Promise<EmpresaRepresentada[]>;
+
+  /** Todas las empresas visibles para el usuario, de todas sus cuentas. */
+  empresasDeUsuario(usuarioId: string): Promise<EmpresaRepresentada[]>;
+
+  /**
+   * Deja registradas las empresas que ARCA ofrecio en un servicio.
+   *
+   * Es acumulativo a proposito: cada modulo ve su propia lista —una clave puede
+   * tener Cuentas Tributarias delegado y Mis Facilidades no— y borrar las que
+   * este servicio no ofrece haria desaparecer del panel empresas que si existen
+   * en otro.
+   */
+  registrarRepresentados(
+    clienteId: string,
+    servicio: string,
+    cuits: readonly string[],
+  ): Promise<void>;
+
   /* --- Datos del tablero --- */
-  notificacionesDe(clienteId: string): Promise<Notificacion[]>;
+
+  /**
+   * Todos estos aceptan un CUIT opcional para acotar a UNA empresa.
+   *
+   * Sin el, devuelven lo de la cuenta entera, que es lo que mostraba el detalle
+   * hasta ahora: la mezcla de todos los representados. La pantalla de una
+   * empresa siempre lo pasa.
+   */
+  notificacionesDe(clienteId: string, contribuyenteCuit?: string): Promise<Notificacion[]>;
   marcarNotificacionVista(clienteId: string, notificacionId: string): Promise<Notificacion | null>;
   actualizarLecturaNotificacion(
     clienteId: string,
@@ -231,16 +277,19 @@ export interface Repositorio {
     notificacionId: string,
     adjuntoId: string,
   ): Promise<NotificacionAdjuntoContenido | null>;
-  saldosDe(clienteId: string): Promise<SaldoTributario[]>;
-  planesDe(clienteId: string): Promise<PlanPago[]>;
+  saldosDe(clienteId: string, contribuyenteCuit?: string): Promise<SaldoTributario[]>;
+  planesDe(clienteId: string, contribuyenteCuit?: string): Promise<PlanPago[]>;
   actualizarLecturaPlan(
     clienteId: string,
     planId: string,
     leido: boolean,
   ): Promise<LecturaLocal | null>;
-  vencimientosDe(clienteId: string): Promise<Vencimiento[]>;
-  ddjjPendientesDe(clienteId: string): Promise<DeclaracionJuradaPendiente[]>;
-  comprobantesDe(clienteId: string): Promise<Comprobante[]>;
+  vencimientosDe(clienteId: string, contribuyenteCuit?: string): Promise<Vencimiento[]>;
+  ddjjPendientesDe(
+    clienteId: string,
+    contribuyenteCuit?: string,
+  ): Promise<DeclaracionJuradaPendiente[]>;
+  comprobantesDe(clienteId: string, contribuyenteCuit?: string): Promise<Comprobante[]>;
 
   /**
    * Inserta o actualiza comunicaciones por el id estable que informa ARCA.
@@ -305,7 +354,16 @@ export interface Repositorio {
   ): Promise<{ planes: number; cuotas: number }>;
 
   /* --- Cola de sincronizacion --- */
-  encolarSync(clienteId: string, modulo: string): Promise<SyncJob>;
+  /**
+   * Encola una sincronizacion.
+   *
+   * Sin `contribuyenteCuit` sincroniza la cuenta entera: una pasada por cada
+   * servicio recorriendo todos los representados, que es lo que conviene cuando
+   * hay que refrescar todo. Con un CUIT, el worker selecciona ESA empresa en
+   * los cuatro servicios — es el boton dentro de una empresa, y no arrastra a
+   * las demas de la misma cuenta.
+   */
+  encolarSync(clienteId: string, modulo: string, contribuyenteCuit?: string): Promise<SyncJob>;
   jobsDe(clienteId: string): Promise<SyncJob[]>;
   actualizarProgresoJob(
     jobId: string,

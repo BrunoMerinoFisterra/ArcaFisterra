@@ -668,6 +668,7 @@ for (const [motor, crearRepo] of MOTORES) {
         const ayudante = await s.login('ayudante@fisterra.com');
         const contenido = new TextEncoder().encode('contenido adjunto');
         await s.repo.guardarNotificaciones('c1', [{
+          contribuyenteCuit: '30-71234567-1',
           idComunicacion: 'DFE-HTTP-1',
           fecha: '2026-08-05',
           organismo: 'ARCA',

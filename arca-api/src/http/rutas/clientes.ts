@@ -162,17 +162,84 @@ export function rutasClientes(repo: Repositorio, config: Config): Router {
     res.json(await repo.solicitudesDe(usuarioDe(req).id));
   });
 
+  /**
+   * Normaliza `?empresa=`. Devuelve undefined si no vino o no es un CUIT.
+   *
+   * Un valor basura se ignora en vez de rechazarse: el filtro es una
+   * comodidad de la pantalla, no una barrera de seguridad — esa la sigue
+   * haciendo `clienteVisible` sobre la cuenta.
+   */
+  function empresaPedida(valor: unknown): string | undefined {
+    if (typeof valor !== 'string') return undefined;
+    const digitos = valor.replace(/\D/g, '');
+    return digitos.length === 11 ? digitos : undefined;
+  }
+
+  /**
+   * El panel principal: todas las empresas de todas las cuentas del usuario.
+   *
+   * Va ANTES de `/:id` a proposito — si no, Express haria matchear "empresas"
+   * como si fuera un id de cliente.
+   */
+  router.get('/empresas', async (req, res) => {
+    const usuario = usuarioDe(req);
+    res.json(await repo.empresasDeUsuario(usuario.id));
+  });
+
+  /** Las empresas que esta cuenta representa, para el panel y el selector. */
+  router.get('/:id/empresas', async (req, res) => {
+    const usuario = usuarioDe(req);
+    const cliente = await clienteVisible(req.params['id'], usuario.id);
+    res.json(await repo.empresasDe(cliente.id));
+  });
+
+  /**
+   * Sincroniza UNA empresa.
+   *
+   * Es distinto de `POST /:id/sincronizar`, que recorre la cuenta entera en una
+   * pasada por servicio. Acá el worker se posiciona en ese CUIT y no toca a las
+   * demas empresas de la cuenta.
+   */
+  router.post('/:id/empresas/:cuit/sincronizar', async (req, res) => {
+    const usuario = usuarioDe(req);
+    const cliente = await clienteVisible(req.params['id'], usuario.id);
+    if (cliente.estadoCredencial !== 'OK') {
+      throw new ErrorHttp(409, 'No se puede sincronizar: la credencial no está en condiciones.');
+    }
+    const empresa = empresaPedida(req.params['cuit']);
+    if (!empresa) throw new ErrorHttp(400, 'El CUIT de la empresa no es válido.');
+
+    const disponibles = await repo.empresasDe(cliente.id);
+    if (!disponibles.some((candidata) => candidata.cuit === empresa)) {
+      throw new ErrorHttp(404, 'Esa empresa no está entre las de esta cuenta.');
+    }
+    res.status(202).json(await repo.encolarSync(cliente.id, 'sincronizacion-completa', empresa));
+  });
+
   router.get('/:id', async (req, res) => {
     const usuario = usuarioDe(req);
     const cliente = await clienteVisible(req.params['id'], usuario.id);
 
+    // `?empresa=<cuit>` acota TODO el detalle a una de las empresas de la
+    // cuenta. Sin el, sigue devolviendo la cuenta entera — que es la mezcla de
+    // todos los representados, y es lo que ve la pantalla de la cuenta.
+    const empresa = empresaPedida(req.query['empresa']);
+    if (empresa) {
+      const disponibles = await repo.empresasDe(cliente.id);
+      // 404 y no 403, igual que `clienteVisible`: no confirmamos que un CUIT
+      // exista bajo otra cuenta.
+      if (!disponibles.some((candidata) => candidata.cuit === empresa)) {
+        throw new ErrorHttp(404, 'Esa empresa no está entre las de esta cuenta.');
+      }
+    }
+
     const [notificaciones, saldos, planes, vencimientos, ddjjPendientes, comprobantes] = await Promise.all([
-      repo.notificacionesDe(cliente.id),
-      repo.saldosDe(cliente.id),
-      repo.planesDe(cliente.id),
-      repo.vencimientosDe(cliente.id),
-      repo.ddjjPendientesDe(cliente.id),
-      repo.comprobantesDe(cliente.id),
+      repo.notificacionesDe(cliente.id, empresa),
+      repo.saldosDe(cliente.id, empresa),
+      repo.planesDe(cliente.id, empresa),
+      repo.vencimientosDe(cliente.id, empresa),
+      repo.ddjjPendientesDe(cliente.id, empresa),
+      repo.comprobantesDe(cliente.id, empresa),
     ]);
 
     // Cuentas Tributarias y Mis Comprobantes agrupan por contribuyente, y ARCA

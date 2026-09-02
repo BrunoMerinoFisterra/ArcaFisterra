@@ -36,12 +36,75 @@ interface FilaHtml {
  * Lee la foto completa de Mis Facilidades para el CUIT del cliente.
  * Solo usa selección, Detalle y Ver Pagos; nunca entra a Nueva Presentación.
  */
+const soloDigitos = (valor: string): string => valor.replace(/\D/g, '');
+const formatearCuit = (cuit: string): string =>
+  `${cuit.slice(0, 2)}-${cuit.slice(2, 10)}-${cuit.slice(10)}`;
+
+export interface PlanesFacilidades {
+  planes: PlanPagoNuevo[];
+  /** CUITs que el servicio ofrecio, para que el panel los liste. */
+  contribuyentes: string[];
+}
+
+/**
+ * Lee los planes de todas las empresas que la clave representa acá.
+ *
+ * A diferencia de Cuentas Tributarias y del DFE, Mis Facilidades NO tiene una
+ * vista de "todos": hay que elegir un contribuyente, aceptar, y el servicio
+ * queda posicionado en el. Cambiar al siguiente obliga a volver a entrar —
+ * verificado con `npm run spike:representados`. Por eso este es el unico modulo
+ * cuyo tiempo crece con la cantidad de empresas.
+ *
+ * Con `soloCuit` recorre una sola: es lo que usa el boton dentro de una empresa.
+ */
 export async function extraerPlanesFacilidades(
   page: Page,
   cuitCliente: string,
-): Promise<PlanPagoNuevo[]> {
-  const vista = await abrirMisFacilidades(page);
+  opciones: { soloCuit?: string } = {},
+): Promise<PlanesFacilidades> {
+  const primeraVista = await abrirMisFacilidades(page);
+  const contribuyentes = await listarContribuyentesFacilidades(primeraVista, cuitCliente);
 
+  const objetivo = opciones.soloCuit ? soloDigitos(opciones.soloCuit) : null;
+  if (objetivo && !contribuyentes.includes(objetivo)) {
+    throw new ArcaError(
+      'REPRESENTADO_NO_DISPONIBLE',
+      `Mis Facilidades no ofrece el CUIT ${opciones.soloCuit}`,
+    );
+  }
+  const aRecorrer = objetivo ? [objetivo] : contribuyentes;
+
+  const planes: PlanPagoNuevo[] = [];
+  for (const [indice, cuit] of aRecorrer.entries()) {
+    // La primera ya esta abierta; para las siguientes hay que reentrar.
+    const vista = indice === 0 ? primeraVista : await abrirMisFacilidades(page);
+    if (aRecorrer.length > 1) {
+      console.log(`      CUIT ${indice + 1}/${aRecorrer.length}: ${formatearCuit(cuit)}`);
+    }
+    planes.push(...(await leerPlanesDeUnCuit(vista, cuit)));
+  }
+  return { planes, contribuyentes };
+}
+
+/**
+ * Los CUITs que ofrece el combo. Si no hay combo, la clave representa a uno
+ * solo y es el titular.
+ */
+async function listarContribuyentesFacilidades(
+  vista: Page,
+  cuitCliente: string,
+): Promise<string[]> {
+  const combo = vista.locator(MIS_FACILIDADES.selectorCuit);
+  if ((await combo.count()) !== 1) return [soloDigitos(cuitCliente)];
+
+  const valores = await combo
+    .locator('option')
+    .evaluateAll((elementos) => elementos.map((o) => (o as HTMLOptionElement).value));
+  const cuits = valores.map((valor: string) => soloDigitos(valor)).filter((cuit) => cuit.length === 11);
+  return cuits.length > 0 ? [...new Set(cuits)] : [soloDigitos(cuitCliente)];
+}
+
+async function leerPlanesDeUnCuit(vista: Page, cuitCliente: string): Promise<PlanPagoNuevo[]> {
   try {
     await seleccionarCuit(vista, cuitCliente);
     const resumenes = await leerResumenes(vista);
@@ -68,15 +131,18 @@ export async function extraerPlanesFacilidades(
       }
 
       planes.push(
-        construirPlan({
-          ...resumen,
-          numero: detalle.numero || resumen.numero,
-          concepto: detalle.concepto || resumen.concepto,
-          fechaConsolidacion: detalle.fechaConsolidacion,
-          tipoPlan: detalle.tipoPlan,
-          cuotas,
-          totalPagado,
-        }),
+        construirPlan(
+          {
+            ...resumen,
+            numero: detalle.numero || resumen.numero,
+            concepto: detalle.concepto || resumen.concepto,
+            fechaConsolidacion: detalle.fechaConsolidacion,
+            tipoPlan: detalle.tipoPlan,
+            cuotas,
+            totalPagado,
+          },
+          soloDigitos(cuitCliente),
+        ),
       );
 
       await volverAlListado(vista, entroEnPagos);
@@ -320,6 +386,8 @@ export function construirPlan(
     cuotas: CuotaPlanNueva[];
     totalPagado: number;
   },
+  /** De que empresa es el plan. El numero solo es unico dentro de su CUIT. */
+  contribuyenteCuit: string,
 ): PlanPagoNuevo {
   const numeros = [...new Set(datos.cuotas.map((c) => c.numero))];
   const estadosPorCuota = new Map<number, string>();
@@ -338,6 +406,7 @@ export function construirPlan(
     )[0];
 
   return {
+    contribuyenteCuit,
     numero: datos.numero,
     concepto: datos.concepto,
     fechaPresentacion: datos.fechaPresentacion,

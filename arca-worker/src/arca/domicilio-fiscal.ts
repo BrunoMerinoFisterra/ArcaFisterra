@@ -15,6 +15,14 @@ export interface FilaDfe {
   organismo: string;
   asunto: string;
   clases: string[];
+  /**
+   * Razon social del contribuyente, tal cual la escribe ARCA.
+   *
+   * Solo viene en la vista "Todos tus representados"; en la bandeja propia la
+   * celda no existe y queda vacia. Es un NOMBRE, no un CUIT: el cruce a CUIT lo
+   * hace `resolverContribuyente` contra el dropdown de esa misma pantalla.
+   */
+  destinatario: string;
 }
 
 interface RespuestaDetalleDfe {
@@ -83,9 +91,21 @@ export async function extraerNotificacionesDfe(
 
     const objetivo = soloDigitos(cuitCliente);
     const usuario = soloDigitos(cuitUsuario);
-    const panel = objetivo === usuario
-      ? await seleccionarBandejaPropia(vista)
-      : await seleccionarRepresentado(vista, objetivo, cuitCliente);
+
+    // "Todos tus representados" (-1) trae los buzones de TODOS en una grilla,
+    // con la razon social de cada uno en su propia columna. Es una sola pasada
+    // en vez de una por empresa, y lo que hace que este modulo no multiplique
+    // el tiempo cuando la cuenta representa a diez.
+    //
+    // Si esa opcion no esta, la clave no representa a nadie mas y se cae a lo
+    // de siempre: la bandeja propia, o el representado puntual.
+    const porNombre = await mapaRepresentados(vista);
+    const panel =
+      porNombre.size > 0 && (await seleccionarTodosLosRepresentados(vista))
+        ? TAB_REPRESENTADOS
+        : objetivo === usuario
+          ? await seleccionarBandejaPropia(vista)
+          : await seleccionarRepresentado(vista, objetivo, cuitCliente);
 
     await vista.locator(`${panel} table`).first().waitFor({ state: 'visible', timeout: 20_000 });
     await cerrarAvisosDfe(vista, 3_000);
@@ -103,8 +123,11 @@ export async function extraerNotificacionesDfe(
       await cerrarAvisosDfe(vista);
       const filas = await leerFilas(vista, panel);
       for (const fila of filas) {
-        const notificacion = notificacionDesdeFila(fila);
-        encontradas.set(notificacion.idComunicacion, notificacion);
+        const contribuyente = resolverContribuyente(fila, porNombre, objetivo);
+        const notificacion = notificacionDesdeFila(fila, contribuyente);
+        // La clave lleva el contribuyente: el id de comunicacion solo es unico
+        // dentro de su buzon.
+        encontradas.set(`${contribuyente} ${notificacion.idComunicacion}`, notificacion);
       }
 
       const siguiente = vista.locator(`${panel} button.pagination-button`).last();
@@ -389,6 +412,61 @@ async function accionDfe<T>(
   );
 }
 
+/**
+ * Razon social normalizada -> CUIT, leido del selector de representados.
+ *
+ * Es la unica fuente confiable para etiquetar las filas de la vista `-1`: los
+ * dos strings los escribe ARCA en la misma pantalla. Vacio cuando la clave no
+ * representa a nadie, que es la señal para caer a la bandeja propia.
+ */
+async function mapaRepresentados(vista: Page): Promise<Map<string, string>> {
+  const mapa = new Map<string, string>();
+  const tab = vista.locator('#representados-comunicaciones-tab___BV_tab_button__');
+  if ((await tab.count()) !== 1) return mapa;
+
+  await accionDfe(vista, 'tab representados', () => tab.click({ timeout: ACCION_DFE_MS }));
+  const selector = vista.locator('#select-representados');
+  if ((await selector.count()) !== 1) return mapa;
+  await selector.waitFor({ state: 'attached', timeout: 15_000 }).catch(() => null);
+
+  const opciones = await selector
+    .locator('option')
+    .evaluateAll((elementos) =>
+      elementos.map((opcion) => ({
+        value: (opcion as HTMLOptionElement).value,
+        texto: opcion.textContent ?? '',
+      })),
+    );
+  for (const opcion of opciones) {
+    const cuit = soloDigitos(opcion.value);
+    // Saltea "-1" (todos) y el placeholder vacio.
+    if (cuit.length !== 11) continue;
+    const nombre = normalizarRazonSocial(opcion.texto);
+    if (nombre) mapa.set(nombre, cuit);
+  }
+  return mapa;
+}
+
+/** Posiciona la grilla en "Todos tus representados". False si no esta. */
+async function seleccionarTodosLosRepresentados(vista: Page): Promise<boolean> {
+  const selector = vista.locator('#select-representados');
+  const todos = vista.locator('button.dropdown-item[id="-1"]');
+  const control = selector.locator(
+    'xpath=following-sibling::*[contains(concat(" ", normalize-space(@class), " "), " input-group ")]',
+  );
+  if ((await control.count()) !== 1) return false;
+
+  await accionDfe(vista, 'desplegar representados', () =>
+    control.click({ timeout: ACCION_DFE_MS }),
+  );
+  if ((await todos.count()) !== 1) return false;
+  await accionDfe(vista, 'elegir todos los representados', () =>
+    todos.click({ timeout: ACCION_DFE_MS }),
+  );
+  await esperarTablaLista(vista, TAB_REPRESENTADOS);
+  return true;
+}
+
 async function seleccionarBandejaPropia(vista: Page): Promise<typeof TAB_PROPIAS> {
   await accionDfe(vista, 'tab mis comunicaciones', () =>
     vista.locator('#mis-comunicaciones-tab___BV_tab_button__').click({ timeout: ACCION_DFE_MS }),
@@ -440,6 +518,9 @@ async function leerFilas(vista: Page, panel: string): Promise<FilaDfe[]> {
       const asunto = fila.querySelector<HTMLElement>('[id^="sistema["]');
       const organismo = fila.querySelector<HTMLElement>('[id^="organismo["]');
       const fecha = fila.querySelector<HTMLElement>('[id^="fechaPublicacion["]');
+      // Mismo convenio de id estable que el resto de la fila, asi que no hay
+      // que ubicar la columna por posicion.
+      const destinatario = fila.querySelector<HTMLElement>('[id^="destinatario["]');
       const idComunicacion = /^sistema\[([^\]]+)\]$/.exec(asunto?.id ?? '')?.[1] ?? '';
       return {
         idComunicacion,
@@ -447,12 +528,58 @@ async function leerFilas(vista: Page, panel: string): Promise<FilaDfe[]> {
         organismo: organismo?.textContent ?? '',
         asunto: asunto?.textContent ?? '',
         clases: asunto ? Array.from(asunto.classList) : [],
+        destinatario: destinatario?.textContent ?? '',
       };
     }),
   );
 }
 
-export function notificacionDesdeFila(fila: FilaDfe): NotificacionNueva {
+/**
+ * Nombres comparables: sin acentos, sin puntuacion y con los espacios
+ * colapsados. ARCA escribe "MUCA S.A.S." en el dropdown y "MUCA SAS" en la
+ * grilla mas seguido de lo que uno quisiera.
+ */
+export function normalizarRazonSocial(valor: string): string {
+  return valor
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+/**
+ * Resuelve el CUIT del contribuyente de una fila.
+ *
+ * La grilla de representados trae la razon social, no el CUIT. El mapa sale del
+ * dropdown de ESA misma pantalla, asi que ambos strings los escribe ARCA en la
+ * misma sesion y deberian coincidir.
+ *
+ * Si no coinciden se CORTA. El resto del worker elige al representado por CUIT
+ * exacto justamente para no equivocarse de contribuyente, y adivinar acá
+ * guardaria la comunicacion de uno bajo la empresa de otro — el mismo daño, con
+ * la diferencia de que este seria silencioso.
+ */
+export function resolverContribuyente(
+  fila: FilaDfe,
+  porNombre: ReadonlyMap<string, string>,
+  cuitPropio: string,
+): string {
+  const nombre = normalizarRazonSocial(fila.destinatario);
+  // Bandeja propia: la columna no existe y todo es del titular.
+  if (!nombre) return cuitPropio;
+
+  const cuit = porNombre.get(nombre);
+  if (!cuit) {
+    throw new ArcaError(
+      'SELECTOR_NO_ENCONTRADO',
+      `El Domicilio Fiscal informa el representado "${limpiar(fila.destinatario)}", que no está entre los del selector`,
+    );
+  }
+  return cuit;
+}
+
+export function notificacionDesdeFila(fila: FilaDfe, contribuyenteCuit: string): NotificacionNueva {
   const idComunicacion = limpiar(fila.idComunicacion);
   const fecha = aFechaIsoDfe(fila.fecha);
   const organismo = limpiar(fila.organismo);
@@ -464,6 +591,7 @@ export function notificacionDesdeFila(fila: FilaDfe): NotificacionNueva {
     );
   }
   return {
+    contribuyenteCuit,
     idComunicacion,
     fecha,
     organismo,

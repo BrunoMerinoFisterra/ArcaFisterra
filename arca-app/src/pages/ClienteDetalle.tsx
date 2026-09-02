@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useId, useMemo, useState, type ReactNode } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
 import {
   actualizarLecturaNotificacion,
   actualizarLecturaPlan,
@@ -36,6 +36,10 @@ type ModuloActivo = 'completa' | 'domicilio' | 'saldos' | 'facilidades' | 'compr
 
 export default function ClienteDetalle() {
   const { id } = useParams<{ id: string }>();
+  // `?empresa=<cuit>` acota TODO el detalle a una empresa de la cuenta. Sin el,
+  // se ve la cuenta entera: la mezcla de todos sus representados.
+  const [parametros] = useSearchParams();
+  const empresa = parametros.get('empresa') ?? undefined;
   const [detalle, setDetalle] = useState<DetalleCliente | null | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
   const [moduloActivo, setModuloActivo] = useState<ModuloActivo | null>(null);
@@ -66,7 +70,7 @@ export default function ClienteDetalle() {
     setDetalle(undefined);
     setError(null);
     setGraficoComprobantesAbierto(false);
-    obtenerDetalleCliente(id)
+    obtenerDetalleCliente(id, empresa)
       .then((d) => {
         if (vigente) setDetalle(d);
       })
@@ -76,7 +80,7 @@ export default function ClienteDetalle() {
     return () => {
       vigente = false;
     };
-  }, [id]);
+  }, [id, empresa]);
 
   async function actualizarTodo() {
     if (!id) return;
@@ -90,7 +94,7 @@ export default function ClienteDetalle() {
       if (terminado.estado !== 'DONE') {
         throw new Error(terminado.error ?? 'No se pudo completar la sincronización de ARCA.');
       }
-      const actualizado = await obtenerDetalleCliente(id);
+      const actualizado = await obtenerDetalleCliente(id, empresa);
       if (actualizado) setDetalle(actualizado);
       setMensajeCompleto('Sincronización completa: los cuatro módulos se actualizaron correctamente.');
     } catch (e) {
@@ -113,7 +117,7 @@ export default function ClienteDetalle() {
       if (terminado.estado !== 'DONE') {
         throw new Error(terminado.error ?? 'No se pudo actualizar el Domicilio Fiscal Electrónico.');
       }
-      const actualizado = await obtenerDetalleCliente(id);
+      const actualizado = await obtenerDetalleCliente(id, empresa);
       if (actualizado) setDetalle(actualizado);
       const cantidad = actualizado?.notificaciones.length ?? 0;
       const sinLeer =
@@ -140,7 +144,7 @@ export default function ClienteDetalle() {
       if (terminado.estado !== 'DONE') {
         throw new Error(terminado.error ?? 'No se pudo actualizar Mis Facilidades.');
       }
-      const actualizado = await obtenerDetalleCliente(id);
+      const actualizado = await obtenerDetalleCliente(id, empresa);
       if (actualizado) setDetalle(actualizado);
       setMensajePlanes(`Mis Facilidades actualizado: ${actualizado?.planes.length ?? 0} planes.`);
     } catch (e) {
@@ -163,7 +167,7 @@ export default function ClienteDetalle() {
       if (terminado.estado !== 'DONE') {
         throw new Error(terminado.error ?? 'No se pudo actualizar Cuentas Tributarias.');
       }
-      const actualizado = await obtenerDetalleCliente(id);
+      const actualizado = await obtenerDetalleCliente(id, empresa);
       if (actualizado) setDetalle(actualizado);
       const obligaciones = actualizado?.saldos ?? [];
       const vencimientosActualizados = actualizado?.vencimientos ?? [];
@@ -194,7 +198,7 @@ export default function ClienteDetalle() {
       if (terminado.estado !== 'DONE') {
         throw new Error(terminado.error ?? 'No se pudo actualizar Mis Comprobantes.');
       }
-      const actualizado = await obtenerDetalleCliente(id);
+      const actualizado = await obtenerDetalleCliente(id, empresa);
       if (actualizado) setDetalle(actualizado);
       setMensajeComprobantes('Mis Comprobantes se actualizó correctamente.');
     } catch (e) {

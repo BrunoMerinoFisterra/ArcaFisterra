@@ -5,6 +5,7 @@ import type {
   Cliente,
   Comprobante,
   DeclaracionJuradaPendiente,
+  EmpresaRepresentada,
   Notificacion,
   PlanPago,
   SaldoTributario,
@@ -132,6 +133,19 @@ export async function crearRepositorioMemoria(): Promise<Repositorio> {
   const cuitDe = (clienteId: string): string =>
     clientes.find((cliente) => cliente.id === clienteId)?.cuit ?? '';
 
+  /** Acota una lectura a una empresa. Sin CUIT no filtra: espeja el de sqlite. */
+  const deEmpresa = (fila: { contribuyenteCuit: string }, cuit?: string): boolean =>
+    !cuit || fila.contribuyenteCuit === cuit;
+
+  /**
+   * Espeja arca_representados: cliente -> (cuit -> ultimo servicio donde se lo
+   * vio). Los clientes de demo arrancan representandose a si mismos, que es lo
+   * que pasa de verdad apenas se sincroniza por primera vez.
+   */
+  const representados = new Map<string, Map<string, string>>(
+    clientes.map((cliente) => [cliente.id, new Map([[cliente.cuit, 'demo']])]),
+  );
+
   /** Espeja la tabla arca_user_clientes. */
   const asignaciones = new Map<string, Set<string>>([
     ['u1', new Set(['c1', 'c2', 'c3', 'c4', 'c5', 'c6'])],
@@ -153,6 +167,30 @@ export async function crearRepositorioMemoria(): Promise<Repositorio> {
     { jobId: string; workerId: string; leaseHasta: string }
   >();
 
+  /** Las filas del panel para un conjunto de cuentas. Espeja `leerEmpresas`. */
+  function empresasDeClientes(clienteIds: readonly string[]): EmpresaRepresentada[] {
+    const filas: EmpresaRepresentada[] = [];
+    for (const clienteId of clienteIds) {
+      const cliente = clientes.find((candidato) => candidato.id === clienteId);
+      if (!cliente) continue;
+      for (const [cuit, vistoEn] of representados.get(clienteId) ?? []) {
+        filas.push({
+          clienteId,
+          cuit,
+          nombre: nombresContribuyentes.get(cuit.replace(/\D/g, '')) ?? cuit,
+          representante: { cuit: cliente.cuit, razonSocial: cliente.razonSocial },
+          esTitular: cuit.replace(/\D/g, '') === cliente.cuit.replace(/\D/g, ''),
+          vistoEn,
+        });
+      }
+    }
+    return filas.sort(
+      (a, b) =>
+        a.representante.razonSocial.localeCompare(b.representante.razonSocial) ||
+        a.nombre.localeCompare(b.nombre),
+    );
+  }
+
   function liberarBloqueoDeJob(jobId: string): void {
     for (const [clave, bloqueo] of bloqueosCuenta) {
       if (bloqueo.jobId === jobId) bloqueosCuenta.delete(clave);
@@ -169,6 +207,7 @@ export async function crearRepositorioMemoria(): Promise<Repositorio> {
   ): Notificacion => ({
     id,
     clienteId,
+    contribuyenteCuit: cuitDe(clienteId),
     idComunicacion,
     fecha: diasDesdeHoy(dias),
     organismo: 'ARCA',
@@ -224,9 +263,9 @@ export async function crearRepositorioMemoria(): Promise<Repositorio> {
   ];
 
   const planes: PlanPago[] = [
-    { id: 'p1', clienteId: 'c1', numero: 'RG 5321 — 000148223', concepto: 'IVA 2025 — Moratoria', fechaPresentacion: null, fechaConsolidacion: null, tipoPlan: '', montoConsolidado: 0, estado: 'Aceptada', situacion: 'Vigente', cuotasTotales: 24, cuotasPagas: 14, montoCuota: 187_400, proximoVencimiento: diasDesdeHoy(9), cuotasImpagas: 0, totalPagado: 0, leidoAppEn: null, cuotas: [] },
-    { id: 'p2', clienteId: 'c2', numero: 'RG 4268 — 000097431', concepto: 'Ganancias 2024', fechaPresentacion: null, fechaConsolidacion: null, tipoPlan: '', montoConsolidado: 0, estado: 'Aceptada', situacion: 'Vigente', cuotasTotales: 12, cuotasPagas: 7, montoCuota: 342_800, proximoVencimiento: diasDesdeHoy(-5), cuotasImpagas: 2, totalPagado: 0, leidoAppEn: null, cuotas: [] },
-    { id: 'p3', clienteId: 'c4', numero: 'RG 5321 — 000151980', concepto: 'Seguridad Social 2025', fechaPresentacion: null, fechaConsolidacion: null, tipoPlan: '', montoConsolidado: 0, estado: 'Aceptada', situacion: 'Plan caduco', cuotasTotales: 36, cuotasPagas: 4, montoCuota: 96_250, proximoVencimiento: diasDesdeHoy(-18), cuotasImpagas: 3, totalPagado: 0, leidoAppEn: null, cuotas: [] },
+    { id: 'p1', clienteId: 'c1', contribuyenteCuit: cuitDe('c1'), numero: 'RG 5321 — 000148223', concepto: 'IVA 2025 — Moratoria', fechaPresentacion: null, fechaConsolidacion: null, tipoPlan: '', montoConsolidado: 0, estado: 'Aceptada', situacion: 'Vigente', cuotasTotales: 24, cuotasPagas: 14, montoCuota: 187_400, proximoVencimiento: diasDesdeHoy(9), cuotasImpagas: 0, totalPagado: 0, leidoAppEn: null, cuotas: [] },
+    { id: 'p2', clienteId: 'c2', contribuyenteCuit: cuitDe('c2'), numero: 'RG 4268 — 000097431', concepto: 'Ganancias 2024', fechaPresentacion: null, fechaConsolidacion: null, tipoPlan: '', montoConsolidado: 0, estado: 'Aceptada', situacion: 'Vigente', cuotasTotales: 12, cuotasPagas: 7, montoCuota: 342_800, proximoVencimiento: diasDesdeHoy(-5), cuotasImpagas: 2, totalPagado: 0, leidoAppEn: null, cuotas: [] },
+    { id: 'p3', clienteId: 'c4', contribuyenteCuit: cuitDe('c4'), numero: 'RG 5321 — 000151980', concepto: 'Seguridad Social 2025', fechaPresentacion: null, fechaConsolidacion: null, tipoPlan: '', montoConsolidado: 0, estado: 'Aceptada', situacion: 'Plan caduco', cuotasTotales: 36, cuotasPagas: 4, montoCuota: 96_250, proximoVencimiento: diasDesdeHoy(-18), cuotasImpagas: 3, totalPagado: 0, leidoAppEn: null, cuotas: [] },
   ];
 
   const vencimientoDemo = (
@@ -542,9 +581,29 @@ export async function crearRepositorioMemoria(): Promise<Repositorio> {
       return credenciales.get(clienteId) ?? null;
     },
 
-    async notificacionesDe(clienteId) {
+    async empresasDe(clienteId) {
+      return empresasDeClientes([clienteId]);
+    },
+
+    async empresasDeUsuario(usuarioId) {
+      return empresasDeClientes([...(asignaciones.get(usuarioId) ?? [])]);
+    },
+
+    async registrarRepresentados(clienteId, servicio, cuits) {
+      const delCliente = representados.get(clienteId) ?? new Map<string, string>();
+      for (const cuit of cuits) {
+        const digitos = cuit.replace(/\D/g, '');
+        if (digitos.length !== 11) continue;
+        // Acumulativo, igual que en sqlite: cada servicio ve su propia lista de
+        // delegaciones y borrar lo que este no ofrece esconderia empresas.
+        delCliente.set(digitos, servicio);
+      }
+      representados.set(clienteId, delCliente);
+    },
+
+    async notificacionesDe(clienteId, contribuyenteCuit) {
       return notificaciones
-        .filter((n) => n.clienteId === clienteId)
+        .filter((n) => n.clienteId === clienteId && deEmpresa(n, contribuyenteCuit))
         .sort((a, b) => b.fecha.localeCompare(a.fecha));
     },
     async marcarNotificacionVista(clienteId, notificacionId) {
@@ -632,6 +691,7 @@ export async function crearRepositorioMemoria(): Promise<Repositorio> {
           notificaciones.push({
             id,
             clienteId,
+            contribuyenteCuit: nueva.contribuyenteCuit,
             idComunicacion: nueva.idComunicacion,
             fecha: nueva.fecha,
             organismo: nueva.organismo,
@@ -648,8 +708,8 @@ export async function crearRepositorioMemoria(): Promise<Repositorio> {
       }
       return { insertadas, actualizadas };
     },
-    async saldosDe(clienteId) {
-      return saldos.filter((s) => s.clienteId === clienteId);
+    async saldosDe(clienteId, contribuyenteCuit) {
+      return saldos.filter((s) => s.clienteId === clienteId && deEmpresa(s, contribuyenteCuit));
     },
     async reemplazarSaldos(clienteId, nuevos) {
       for (let i = saldos.length - 1; i >= 0; i -= 1) {
@@ -658,8 +718,8 @@ export async function crearRepositorioMemoria(): Promise<Repositorio> {
       saldos.push(...nuevos.map((saldo) => ({ ...saldo, clienteId })));
       return nuevos.length;
     },
-    async planesDe(clienteId) {
-      return planes.filter((p) => p.clienteId === clienteId);
+    async planesDe(clienteId, contribuyenteCuit) {
+      return planes.filter((p) => p.clienteId === clienteId && deEmpresa(p, contribuyenteCuit));
     },
     async actualizarLecturaPlan(clienteId, planId, leido) {
       const plan = planes.find(
@@ -669,9 +729,9 @@ export async function crearRepositorioMemoria(): Promise<Repositorio> {
       plan.leidoAppEn = leido ? new Date().toISOString() : null;
       return { leidoAppEn: plan.leidoAppEn };
     },
-    async vencimientosDe(clienteId) {
+    async vencimientosDe(clienteId, contribuyenteCuit) {
       return vencimientos
-        .filter((v) => v.clienteId === clienteId)
+        .filter((v) => v.clienteId === clienteId && deEmpresa(v, contribuyenteCuit))
         .sort((a, b) => a.fecha.localeCompare(b.fecha));
     },
     async reemplazarVencimientos(clienteId, nuevos) {
@@ -687,9 +747,9 @@ export async function crearRepositorioMemoria(): Promise<Repositorio> {
       );
       return nuevos.length;
     },
-    async ddjjPendientesDe(clienteId) {
+    async ddjjPendientesDe(clienteId, contribuyenteCuit) {
       return ddjjPendientes
-        .filter((declaracion) => declaracion.clienteId === clienteId)
+        .filter((d) => d.clienteId === clienteId && deEmpresa(d, contribuyenteCuit))
         .sort((a, b) =>
           a.contribuyenteCuit.localeCompare(b.contribuyenteCuit) ||
           b.periodo.localeCompare(a.periodo),
@@ -708,9 +768,9 @@ export async function crearRepositorioMemoria(): Promise<Repositorio> {
       );
       return nuevas.length;
     },
-    async comprobantesDe(clienteId) {
+    async comprobantesDe(clienteId, contribuyenteCuit) {
       return comprobantes
-        .filter((c) => c.clienteId === clienteId)
+        .filter((c) => c.clienteId === clienteId && deEmpresa(c, contribuyenteCuit))
         .sort((a, b) => b.fecha.localeCompare(a.fecha));
     },
 
@@ -765,10 +825,13 @@ export async function crearRepositorioMemoria(): Promise<Repositorio> {
       return { planes: nuevos.length, cuotas };
     },
 
-    async encolarSync(clienteId, modulo) {
+    async encolarSync(clienteId, modulo, contribuyenteCuit) {
+      const empresa = contribuyenteCuit?.replace(/\D/g, '') || undefined;
       const activo = jobs.find(
         (j) =>
           j.clienteId === clienteId &&
+          // Separado por empresa, igual que en sqlite: la A no bloquea a la B.
+          (j.contribuyenteCuit ?? '') === (empresa ?? '') &&
           (j.modulo === modulo ||
             j.modulo === 'sincronizacion-completa' ||
             modulo === 'sincronizacion-completa') &&
@@ -789,6 +852,7 @@ export async function crearRepositorioMemoria(): Promise<Repositorio> {
         progresoActual: 0,
         progresoTotal: modulo === 'sincronizacion-completa' ? 4 : 1,
         pasoActual: 'En cola',
+        ...(empresa ? { contribuyenteCuit: empresa } : {}),
       };
       jobs.push(job);
       const cliente = buscarCliente(clienteId);

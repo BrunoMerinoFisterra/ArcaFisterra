@@ -18,10 +18,13 @@ export function prepararEsquemaSqlite(db: DatabaseSync, esquema: string): void {
   migrarVencimientosConContribuyente(db);
   asegurarColumnasPlanes(db);
   asegurarColumnasNotificaciones(db);
+  migrarNotificacionesConContribuyente(db);
+  migrarPlanesConContribuyente(db);
   // Una reconstruccion elimina los indices de la tabla anterior.
   db.exec(esquema);
   asegurarColumnasJobs(db);
   asegurarUnSoloJobActivo(db);
+  asegurarJobPorEmpresa(db);
   limpiarDetalleAutorizacionAnterior(db);
 
   db.exec(`
@@ -65,6 +68,10 @@ export function prepararEsquemaSqlite(db: DatabaseSync, esquema: string): void {
   db.prepare(
     `INSERT OR IGNORE INTO arca_schema_migrations (version, aplicada_en)
      VALUES (10, ?)`,
+  ).run(new Date().toISOString());
+  db.prepare(
+    `INSERT OR IGNORE INTO arca_schema_migrations (version, aplicada_en)
+     VALUES (11, ?)`,
   ).run(new Date().toISOString());
 }
 
@@ -125,6 +132,130 @@ function migrarComprobantesConContribuyente(db: DatabaseSync): void {
     db.exec('ROLLBACK');
     throw error;
   } finally {
+    db.exec('PRAGMA foreign_keys = ON');
+  }
+}
+
+/**
+ * Agrega el contribuyente a las notificaciones del DFE.
+ *
+ * El backfill toma el CUIT del cliente y es EXACTO, no una aproximacion: hasta
+ * esta version el worker leia unicamente el buzon del titular —nunca el de un
+ * representado—, asi que toda fila existente es suya. Cuando el worker empiece
+ * a recorrer representados, las nuevas ya vienen con su CUIT propio.
+ */
+function migrarNotificacionesConContribuyente(db: DatabaseSync): void {
+  const columnas = db
+    .prepare('PRAGMA table_info(arca_notificaciones)')
+    .all() as Array<{ name: string }>;
+  if (columnas.some((columna) => columna.name === 'contribuyente_cuit')) return;
+
+  db.exec('PRAGMA foreign_keys = OFF');
+  // Sin esto, el RENAME reescribe la referencia en arca_notificacion_adjuntos
+  // para que apunte a la tabla renombrada, y al dropearla queda colgada: la
+  // base pasa `integrity_check` pero `foreign_key_check` acusa una violacion
+  // por cada adjunto. Las migraciones anteriores no lo necesitaron porque
+  // reconstruian tablas sin hijas.
+  db.exec('PRAGMA legacy_alter_table = ON');
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    db.exec(`
+      ALTER TABLE arca_notificaciones RENAME TO arca_notificaciones_sin_contribuyente;
+
+      CREATE TABLE arca_notificaciones (
+        id                 TEXT PRIMARY KEY,
+        cliente_id         TEXT NOT NULL REFERENCES arca_clientes(id) ON DELETE CASCADE,
+        contribuyente_cuit TEXT NOT NULL,
+        id_comunicacion    TEXT NOT NULL,
+        fecha              TEXT NOT NULL,
+        organismo          TEXT NOT NULL,
+        asunto             TEXT NOT NULL,
+        leida              INTEGER NOT NULL DEFAULT 0,
+        vista_app_en       TEXT,
+        leido_app_en       TEXT,
+        cuerpo             TEXT,
+        UNIQUE (cliente_id, contribuyente_cuit, id_comunicacion)
+      );
+
+      INSERT INTO arca_notificaciones
+        (id, cliente_id, contribuyente_cuit, id_comunicacion, fecha, organismo,
+         asunto, leida, vista_app_en, leido_app_en, cuerpo)
+      SELECT n.id, n.cliente_id, c.cuit, n.id_comunicacion, n.fecha, n.organismo,
+             n.asunto, n.leida, n.vista_app_en, n.leido_app_en, n.cuerpo
+        FROM arca_notificaciones_sin_contribuyente n
+        JOIN arca_clientes c ON c.id = n.cliente_id;
+
+      DROP TABLE arca_notificaciones_sin_contribuyente;
+    `);
+    db.exec('COMMIT');
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  } finally {
+    // El pragma es de la CONEXION, y el repositorio la conserva mientras vive
+    // el proceso: dejarlo encendido cambiaria el comportamiento de cualquier
+    // ALTER posterior.
+    db.exec('PRAGMA legacy_alter_table = OFF');
+    db.exec('PRAGMA foreign_keys = ON');
+  }
+}
+
+/** Lo mismo para los planes de Mis Facilidades. Ver el comentario de arriba. */
+function migrarPlanesConContribuyente(db: DatabaseSync): void {
+  const columnas = db.prepare('PRAGMA table_info(arca_planes)').all() as Array<{ name: string }>;
+  if (columnas.some((columna) => columna.name === 'contribuyente_cuit')) return;
+
+  db.exec('PRAGMA foreign_keys = OFF');
+  // Igual que en notificaciones: sin esto arca_plan_cuotas queda apuntando a la
+  // tabla renombrada y se rompen las 1891 cuotas.
+  db.exec('PRAGMA legacy_alter_table = ON');
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    db.exec(`
+      ALTER TABLE arca_planes RENAME TO arca_planes_sin_contribuyente;
+
+      CREATE TABLE arca_planes (
+        id                  TEXT PRIMARY KEY,
+        cliente_id          TEXT NOT NULL REFERENCES arca_clientes(id) ON DELETE CASCADE,
+        contribuyente_cuit  TEXT NOT NULL,
+        numero              TEXT NOT NULL,
+        concepto            TEXT NOT NULL,
+        fecha_presentacion  TEXT,
+        fecha_consolidacion TEXT,
+        tipo_plan           TEXT NOT NULL DEFAULT '',
+        monto_consolidado   REAL NOT NULL DEFAULT 0,
+        estado              TEXT NOT NULL DEFAULT '',
+        situacion           TEXT NOT NULL DEFAULT '',
+        cuotas_totales      INTEGER NOT NULL,
+        cuotas_pagas        INTEGER NOT NULL,
+        cuotas_impagas      INTEGER NOT NULL,
+        monto_cuota         REAL NOT NULL,
+        proximo_vencimiento TEXT,
+        total_pagado        REAL NOT NULL DEFAULT 0,
+        leido_app_en        TEXT,
+        UNIQUE (cliente_id, contribuyente_cuit, numero)
+      );
+
+      INSERT INTO arca_planes
+        (id, cliente_id, contribuyente_cuit, numero, concepto, fecha_presentacion,
+         fecha_consolidacion, tipo_plan, monto_consolidado, estado, situacion,
+         cuotas_totales, cuotas_pagas, cuotas_impagas, monto_cuota,
+         proximo_vencimiento, total_pagado, leido_app_en)
+      SELECT p.id, p.cliente_id, c.cuit, p.numero, p.concepto, p.fecha_presentacion,
+             p.fecha_consolidacion, p.tipo_plan, p.monto_consolidado, p.estado, p.situacion,
+             p.cuotas_totales, p.cuotas_pagas, p.cuotas_impagas, p.monto_cuota,
+             p.proximo_vencimiento, p.total_pagado, p.leido_app_en
+        FROM arca_planes_sin_contribuyente p
+        JOIN arca_clientes c ON c.id = p.cliente_id;
+
+      DROP TABLE arca_planes_sin_contribuyente;
+    `);
+    db.exec('COMMIT');
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  } finally {
+    db.exec('PRAGMA legacy_alter_table = OFF');
     db.exec('PRAGMA foreign_keys = ON');
   }
 }
@@ -526,6 +657,41 @@ function asegurarUnSoloJobActivo(db: DatabaseSync): void {
       DROP INDEX IF EXISTS ux_jobs_cliente_modulo_activo;
       CREATE UNIQUE INDEX IF NOT EXISTS ux_jobs_cliente_modulo_activo
         ON arca_sync_jobs (cliente_id, modulo, COALESCE(solicitud_id, ''))
+        WHERE estado IN ('PENDING', 'RUNNING');
+      COMMIT;
+    `);
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
+}
+
+/**
+ * Permite encolar un job apuntado a UNA empresa representada.
+ *
+ * La columna es nullable y NULL significa "toda la cuenta", que es el
+ * comportamiento de siempre: por eso alcanza un ALTER y no hace falta
+ * reconstruir la tabla.
+ *
+ * El indice tiene que incluirla o sincronizar la empresa A bloquearia encolar
+ * la B de la misma cuenta, que no tienen nada que ver entre si. Que despues
+ * corran de a una la garantiza `arca_sync_locks`, que serializa por cuenta
+ * ARCA — esa es la proteccion real contra dos logins simultaneos, no el indice.
+ */
+function asegurarJobPorEmpresa(db: DatabaseSync): void {
+  const columnas = db.prepare('PRAGMA table_info(arca_sync_jobs)').all() as Array<{ name: string }>;
+  if (columnas.some((columna) => columna.name === 'contribuyente_cuit')) return;
+
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    db.exec(`
+      ALTER TABLE arca_sync_jobs ADD COLUMN contribuyente_cuit TEXT;
+
+      DROP INDEX IF EXISTS ux_jobs_cliente_modulo_activo;
+      CREATE UNIQUE INDEX IF NOT EXISTS ux_jobs_cliente_modulo_activo
+        ON arca_sync_jobs (
+          cliente_id, modulo, COALESCE(solicitud_id, ''), COALESCE(contribuyente_cuit, '')
+        )
         WHERE estado IN ('PENDING', 'RUNNING');
       COMMIT;
     `);

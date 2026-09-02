@@ -59,18 +59,22 @@ CREATE TABLE IF NOT EXISTS arca_credenciales (
 );
 
 CREATE TABLE IF NOT EXISTS arca_notificaciones (
-  id              TEXT PRIMARY KEY,
-  cliente_id      TEXT NOT NULL REFERENCES arca_clientes(id) ON DELETE CASCADE,
-  id_comunicacion TEXT NOT NULL,
-  fecha           TEXT NOT NULL,
-  organismo       TEXT NOT NULL,
-  asunto          TEXT NOT NULL,
-  leida           INTEGER NOT NULL DEFAULT 0,
-  vista_app_en    TEXT,
-  leido_app_en    TEXT,
-  cuerpo          TEXT,
-  -- Clave natural de ARCA: hace idempotente el sync de notificaciones.
-  UNIQUE (cliente_id, id_comunicacion)
+  id                 TEXT PRIMARY KEY,
+  cliente_id         TEXT NOT NULL REFERENCES arca_clientes(id) ON DELETE CASCADE,
+  -- De QUE contribuyente es este buzon. Una misma clave fiscal representa a
+  -- varios, y sin esta columna el detalle mezclaba las comunicaciones de todos.
+  contribuyente_cuit TEXT NOT NULL,
+  id_comunicacion    TEXT NOT NULL,
+  fecha              TEXT NOT NULL,
+  organismo          TEXT NOT NULL,
+  asunto             TEXT NOT NULL,
+  leida              INTEGER NOT NULL DEFAULT 0,
+  vista_app_en       TEXT,
+  leido_app_en       TEXT,
+  cuerpo             TEXT,
+  -- Clave natural de ARCA: hace idempotente el sync de notificaciones. Lleva el
+  -- contribuyente porque el id de comunicacion solo es unico dentro de su buzon.
+  UNIQUE (cliente_id, contribuyente_cuit, id_comunicacion)
 );
 
 CREATE TABLE IF NOT EXISTS arca_notificacion_adjuntos (
@@ -107,6 +111,9 @@ CREATE TABLE IF NOT EXISTS arca_saldos (
 CREATE TABLE IF NOT EXISTS arca_planes (
   id                  TEXT PRIMARY KEY,
   cliente_id          TEXT NOT NULL REFERENCES arca_clientes(id) ON DELETE CASCADE,
+  -- De QUE contribuyente es el plan. Ver el comentario de arca_notificaciones:
+  -- una clave representa a varios y el detalle los mostraba mezclados.
+  contribuyente_cuit  TEXT NOT NULL,
   numero              TEXT NOT NULL,
   concepto            TEXT NOT NULL,
   fecha_presentacion  TEXT,
@@ -122,7 +129,8 @@ CREATE TABLE IF NOT EXISTS arca_planes (
   proximo_vencimiento TEXT,
   total_pagado        REAL NOT NULL DEFAULT 0,
   leido_app_en        TEXT,
-  UNIQUE (cliente_id, numero)
+  -- El numero de plan es unico dentro del contribuyente, no de la clave fiscal.
+  UNIQUE (cliente_id, contribuyente_cuit, numero)
 );
 
 CREATE TABLE IF NOT EXISTS arca_plan_cuotas (
@@ -263,7 +271,14 @@ CREATE TABLE IF NOT EXISTS arca_sync_jobs (
   -- de una solicitud de acceso. `finalizarJob` mira esta columna para no tocar
   -- el estado del cliente, porque una clave equivocada de quien pide acceso no
   -- puede marcar como invalida la credencial de la oficina que ya la tenia.
-  solicitud_id TEXT REFERENCES arca_solicitudes_acceso(id) ON DELETE CASCADE
+  solicitud_id TEXT REFERENCES arca_solicitudes_acceso(id) ON DELETE CASCADE,
+  -- A que empresa apunta el job.
+  --
+  -- NULL = toda la cuenta, que es la sincronizacion de siempre: una sola pasada
+  -- por cada servicio recorriendo todos los representados. Con un CUIT cargado,
+  -- el worker selecciona ESA empresa en los cuatro servicios y no toca las
+  -- demas. Es lo que dispara el boton dentro de una empresa.
+  contribuyente_cuit TEXT
 );
 
 -- Razon social de los contribuyentes que aparecen agrupados en Cuentas
@@ -275,6 +290,27 @@ CREATE TABLE IF NOT EXISTS arca_sync_jobs (
 --
 -- No lleva cliente_id a proposito: un CUIT tiene UNA razon social, sin importar
 -- desde que cliente se lo mire. Cargarlo una vez lo muestra en todo el panel.
+-- Empresas por las que una cuenta puede actuar en ARCA.
+--
+-- Es lo que el panel principal lista: una fila por (cuenta, empresa), que es
+-- justamente la unidad que el usuario ve y en la que entra. NO son altas de
+-- clientes de la app y no consumen cupo — la unidad de credencial y de
+-- sincronizacion sigue siendo `arca_clientes`.
+--
+-- La llena el worker con lo que ARCA ofrece en cada servicio. Sin esta tabla,
+-- los representados solo existian implicitos en los datos ya bajados: una
+-- cuenta recien cargada no mostraba ninguna empresa hasta la primera
+-- sincronizacion, y una empresa sin movimientos no aparecia nunca.
+CREATE TABLE IF NOT EXISTS arca_representados (
+  cliente_id     TEXT NOT NULL REFERENCES arca_clientes(id) ON DELETE CASCADE,
+  cuit           TEXT NOT NULL,
+  -- Ultimo servicio donde ARCA lo ofrecio. Sirve para explicar en el panel por
+  -- que una empresa tiene unos modulos y no otros.
+  visto_en       TEXT NOT NULL DEFAULT '',
+  actualizado_en TEXT NOT NULL,
+  PRIMARY KEY (cliente_id, cuit)
+);
+
 CREATE TABLE IF NOT EXISTS arca_contribuyentes (
   cuit           TEXT PRIMARY KEY,
   nombre         TEXT NOT NULL,

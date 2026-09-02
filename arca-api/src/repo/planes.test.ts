@@ -4,6 +4,7 @@ import { crearRepositorioSqlite } from './sqlite.js';
 import type { PlanPagoNuevo } from './tipos.js';
 
 const PLAN: PlanPagoNuevo = {
+  contribuyenteCuit: '30-71201119-6',
   numero: 'W813337',
   concepto: 'RG 5321 - Plan Deuda General',
   fechaPresentacion: '2026-03-12',

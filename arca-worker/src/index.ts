@@ -257,7 +257,7 @@ async function procesar(job: SyncJob, cfg: ConfigWorker, propietario: string): P
       }, propietario);
       console.log(`  [${indice + 1}/${modulos.length}] ${ETIQUETAS_MODULO[modulo]}...`);
       try {
-        await procesarModulo(modulo, cliente, acceso, sesion, sesionPath, cfg);
+        await procesarModulo(modulo, cliente, acceso, sesion, sesionPath, cfg, job.contribuyenteCuit);
       } catch (error) {
         // Con un solo modulo no hay nada que salvar, y ciertas fallas invalidan
         // la sesion o la credencial: esas cortan igual. El resto es de ESE
@@ -446,6 +446,8 @@ async function procesarModulo(
   sesion: SesionArca,
   sesionPath: string,
   cfg: ConfigWorker,
+  /** CUIT cuando el job apunta a UNA empresa; ausente = toda la cuenta. */
+  empresa?: string,
 ): Promise<void> {
   if (modulo === 'domicilio-fiscal') {
     const detallesExistentes = new Set(
@@ -472,7 +474,14 @@ async function procesarModulo(
   }
 
   if (modulo === 'mis-facilidades') {
-    const planes = await extraerPlanesFacilidades(sesion.page, cliente.cuit);
+    const { planes, contribuyentes } = await extraerPlanesFacilidades(
+      sesion.page,
+      cliente.cuit,
+      empresa ? { soloCuit: empresa } : {},
+    );
+    // Antes de guardar: si la corrida falla despues, el panel igual se entera
+    // de que existen esas empresas.
+    await repo.registrarRepresentados(cliente.id, 'Mis Facilidades', contribuyentes);
     const guardados = await repo.reemplazarPlanes(cliente.id, planes);
     console.log(`      ${guardados.planes} planes, ${guardados.cuotas} filas de cuotas`);
     return;
@@ -486,6 +495,13 @@ async function procesarModulo(
       acceso.clave,
     );
     await sesion.context.storageState({ path: sesionPath });
+    // Los CUIT que este servicio ofrecio salen de las propias filas: el modulo
+    // recorre a todos los representados y etiqueta cada una con su duenio.
+    await repo.registrarRepresentados(
+      cliente.id,
+      'Cuentas Tributarias',
+      [...new Set(saldos.map((saldo) => saldo.contribuyenteCuit))],
+    );
     const guardados = await repo.reemplazarSaldos(cliente.id, saldos);
     const vencimientosGuardados = await repo.reemplazarVencimientos(cliente.id, vencimientos);
     const ddjjGuardadas = await repo.reemplazarDdjjPendientes(cliente.id, ddjjPendientes);
@@ -516,7 +532,18 @@ async function procesarModulo(
   // Cuentas Tributarias. Si la pantalla de selección no aparece, la lista viene
   // vacía y se sincroniza únicamente el CUIT del cliente.
   const contribuyentes = await listarContribuyentesDeComprobantes(await paginaActual());
-  const aRecorrer = contribuyentes.length > 0 ? contribuyentes : [cliente.cuit];
+  await repo.registrarRepresentados(cliente.id, 'Mis Comprobantes', contribuyentes);
+  const todos = contribuyentes.length > 0 ? contribuyentes : [cliente.cuit];
+  // Con el job apuntado a una empresa se recorre solo esa; si no, todas.
+  const aRecorrer = empresa
+    ? todos.filter((cuit) => cuit.replace(/\D/g, '') === empresa.replace(/\D/g, ''))
+    : todos;
+  if (empresa && aRecorrer.length === 0) {
+    throw new ArcaError(
+      'REPRESENTADO_NO_DISPONIBLE',
+      `Mis Comprobantes no ofrece el CUIT ${empresa}`,
+    );
+  }
   if (contribuyentes.length > 1) {
     console.log(`      ${contribuyentes.length} contribuyentes disponibles`);
   }

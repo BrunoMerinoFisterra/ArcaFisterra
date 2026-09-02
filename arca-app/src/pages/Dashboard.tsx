@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ErrorApi, listarResumenClientes } from '../api/client';
-import type { ResumenCliente } from '../types';
+import { ErrorApi, listarEmpresas, listarResumenClientes } from '../api/client';
+import type { EmpresaRepresentada, ResumenCliente } from '../types';
 import { desde, pesos } from '../lib/format';
 import { plural } from '../lib/plural';
 import { Badge, EstadoSyncBadge } from '../components/Badge';
@@ -11,6 +11,7 @@ export default function Dashboard() {
   const [resumenes, setResumenes] = useState<ResumenCliente[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [bloqueoCupo, setBloqueoCupo] = useState<string | null>(null);
+  const [empresas, setEmpresas] = useState<EmpresaRepresentada[] | null>(null);
 
   useEffect(() => {
     let vigente = true;
@@ -25,6 +26,16 @@ export default function Dashboard() {
         } else {
           setError(e instanceof Error ? e.message : 'No se pudo cargar el tablero.');
         }
+      });
+    // Las empresas van en su propio pedido: el resumen es por cuenta y este
+    // listado es por (cuenta, empresa), otra granularidad.
+    listarEmpresas()
+      .then((e) => {
+        if (vigente) setEmpresas(e);
+      })
+      .catch(() => {
+        // Un fallo aca no debe tapar el tablero: la seccion simplemente no se
+        // muestra.
       });
     return () => {
       vigente = false;
@@ -71,7 +82,71 @@ export default function Dashboard() {
           <ClienteCard key={r.cliente.id} resumen={r} />
         ))}
       </div>
+
+      <ListaEmpresas empresas={empresas} />
     </>
+  );
+}
+
+/**
+ * Las empresas por las que cada cuenta puede actuar en ARCA.
+ *
+ * Una fila por (cuenta, empresa): si dos claves representan a la misma empresa
+ * aparece dos veces, cada una con su representante, porque los datos que se ven
+ * son los que bajó ESA cuenta.
+ *
+ * Entrar lleva al detalle filtrado por su CUIT — que es el punto de todo esto:
+ * dejar de ver la carpeta fiscal de todos los representados mezclada.
+ */
+function ListaEmpresas({ empresas }: { empresas: EmpresaRepresentada[] | null }) {
+  if (empresas === null) return null;
+  if (empresas.length === 0) {
+    return (
+      <section className="seccion">
+        <h2>Empresas</h2>
+        <p className="vacio">
+          Todavía no hay empresas conocidas. Aparecen después de la primera sincronización de cada
+          cuenta, con lo que ARCA ofrezca en cada servicio.
+        </p>
+      </section>
+    );
+  }
+
+  return (
+    <section className="seccion">
+      <h2>Empresas</h2>
+      <p className="tenue">
+        {plural(empresas.length, 'empresa', 'empresas')} sobre las que podés actuar. Al entrar vas a
+        ver sólo lo de esa empresa.
+      </p>
+      <div className="tabla-scroll">
+        <table className="tabla">
+          <thead>
+            <tr>
+              <th>Empresa</th>
+              <th>CUIT</th>
+              <th>Representada por</th>
+              <th>Visto en</th>
+            </tr>
+          </thead>
+          <tbody>
+            {empresas.map((empresa) => (
+              <tr key={`${empresa.clienteId} ${empresa.cuit}`}>
+                <td>
+                  <Link to={`/cliente/${empresa.clienteId}?empresa=${empresa.cuit}`}>
+                    {empresa.nombre}
+                  </Link>
+                  {empresa.esTitular && <Badge tono="neutro">Titular</Badge>}
+                </td>
+                <td className="numero">{empresa.cuit}</td>
+                <td>{empresa.representante.razonSocial}</td>
+                <td className="tenue">{empresa.vistoEn || '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
   );
 }
 

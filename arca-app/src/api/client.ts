@@ -9,6 +9,7 @@ import type {
   AdministracionClientes,
   Cliente,
   DetalleCliente,
+  EmpresaRepresentada,
   Notificacion,
   ResumenCliente,
   SolicitudAcceso,
@@ -126,9 +127,42 @@ export function listarResumenClientes(): Promise<ResumenCliente[]> {
   return pedir<ResumenCliente[]>('/clientes');
 }
 
-export async function obtenerDetalleCliente(clienteId: string): Promise<DetalleCliente | null> {
+/** Todas las empresas del usuario, de todas sus cuentas. Arma el panel. */
+export function listarEmpresas(): Promise<EmpresaRepresentada[]> {
+  return pedir<EmpresaRepresentada[]>('/clientes/empresas');
+}
+
+/** Las empresas de UNA cuenta, para el selector dentro del detalle. */
+export function listarEmpresasDeCliente(clienteId: string): Promise<EmpresaRepresentada[]> {
+  return pedir<EmpresaRepresentada[]>(`/clientes/${encodeURIComponent(clienteId)}/empresas`);
+}
+
+/**
+ * Sincroniza UNA empresa.
+ *
+ * Distinto de `sincronizarCompleto`, que recorre la cuenta entera en una pasada
+ * por servicio: acá el worker se posiciona en ese CUIT y no toca a las demás.
+ */
+export function sincronizarEmpresa(clienteId: string, cuit: string): Promise<SyncJob> {
+  return pedir<SyncJob>(
+    `/clientes/${encodeURIComponent(clienteId)}/empresas/${encodeURIComponent(cuit)}/sincronizar`,
+    { method: 'POST' },
+  );
+}
+
+/**
+ * Detalle de una cuenta, o de UNA de sus empresas si se pasa el CUIT.
+ *
+ * Sin `empresa` devuelve la cuenta entera, que es la mezcla de todos sus
+ * representados — lo que se veía antes de separar por empresa.
+ */
+export async function obtenerDetalleCliente(
+  clienteId: string,
+  empresa?: string,
+): Promise<DetalleCliente | null> {
+  const filtro = empresa ? `?empresa=${encodeURIComponent(empresa)}` : '';
   try {
-    return await pedir<DetalleCliente>(`/clientes/${encodeURIComponent(clienteId)}`);
+    return await pedir<DetalleCliente>(`/clientes/${encodeURIComponent(clienteId)}${filtro}`);
   } catch (e) {
     // 404 es tanto "no existe" como "no es tuyo": la API no los distingue a
     // propósito, y acá tampoco hace falta.

@@ -2,10 +2,12 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { Page } from 'playwright';
 import type { NotificacionNueva } from '../../../arca-api/src/repo/tipos.js';
+import { ArcaError } from './errors.js';
 import {
   aFechaIsoDfe,
   cargarDetallesDfe,
   notificacionDesdeFila,
+  resolverContribuyente,
 } from './domicilio-fiscal.js';
 
 interface RespuestaFalsa {
@@ -42,8 +44,11 @@ function paginaDfeFalsa(
   return { page, solicitudes };
 }
 
+const CUIT = '30-71201119-6';
+
 function notificacion(idComunicacion: string, leida: boolean): NotificacionNueva {
   return {
+    contribuyenteCuit: CUIT,
     idComunicacion,
     fecha: '2026-08-05',
     organismo: 'ARCA',
@@ -55,13 +60,15 @@ function notificacion(idComunicacion: string, leida: boolean): NotificacionNueva
 test('convierte la fila visible del DFE sin abrir la comunicación', () => {
   assert.deepEqual(
     notificacionDesdeFila({
+      destinatario: '',
       idComunicacion: ' 659513833 ',
       fecha: ' 06/07/2026 ',
       organismo: ' ARCA ',
       asunto: ' Sistema de Cuentas Tributarias ',
       clases: ['no-leido'],
-    }),
+    }, CUIT),
     {
+      contribuyenteCuit: CUIT,
       idComunicacion: '659513833',
       fecha: '2026-07-06',
       organismo: 'ARCA',
@@ -73,13 +80,55 @@ test('convierte la fila visible del DFE sin abrir la comunicación', () => {
 
 test('distingue leido de no-leido por token de clase exacto', () => {
   const base = {
+    destinatario: '',
     idComunicacion: '657238716',
     fecha: '22/06/2026',
     organismo: 'ARCA',
     asunto: 'Sistema de Cuentas Tributarias',
   };
-  assert.equal(notificacionDesdeFila({ ...base, clases: ['leido'] }).leida, true);
-  assert.equal(notificacionDesdeFila({ ...base, clases: ['no-leido'] }).leida, false);
+  assert.equal(notificacionDesdeFila({ ...base, clases: ['leido'] }, CUIT).leida, true);
+  assert.equal(notificacionDesdeFila({ ...base, clases: ['no-leido'] }, CUIT).leida, false);
+});
+
+const REPRESENTADOS = new Map([
+  ['fisterra s r l', '30712011196'],
+  ['reducto patagonico srl', '30709681725'],
+]);
+
+const fila = (destinatario: string) => ({
+  destinatario,
+  idComunicacion: '1',
+  fecha: '22/06/2026',
+  organismo: 'ARCA',
+  asunto: 'x',
+  clases: [],
+});
+
+test('etiqueta cada fila con el CUIT del representado que dice la grilla', () => {
+  assert.equal(
+    resolverContribuyente(fila('REDUCTO PATAGONICO SRL'), REPRESENTADOS, '30712011196'),
+    '30709681725',
+  );
+  // ARCA no es consistente con puntos ni acentos entre el dropdown y la grilla.
+  assert.equal(
+    resolverContribuyente(fila('  Fisterra  S.R.L. '), REPRESENTADOS, '30709681725'),
+    '30712011196',
+  );
+});
+
+test('sin columna de representado, la fila es del titular', () => {
+  // Es la bandeja propia: ahi la celda no existe y todo es de la cuenta.
+  assert.equal(resolverContribuyente(fila(''), new Map(), '30712011196'), '30712011196');
+});
+
+test('corta si el representado no esta entre los del selector', () => {
+  // El modo de falla que esto evita es silencioso y feo: guardar la
+  // comunicacion de un contribuyente bajo la empresa de otro.
+  assert.throws(
+    () => resolverContribuyente(fila('EMPRESA QUE NO ESTABA SA'), REPRESENTADOS, '30712011196'),
+    (error: unknown) =>
+      error instanceof ArcaError && error.code === 'SELECTOR_NO_ENCONTRADO',
+  );
 });
 
 test('rechaza fechas que no sean las publicadas por ARCA', () => {

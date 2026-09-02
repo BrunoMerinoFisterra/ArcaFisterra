@@ -8,6 +8,7 @@ import type {
   Comprobante,
   CuotaPlan,
   DeclaracionJuradaPendiente,
+  EmpresaRepresentada,
   EstadoCredencial,
   EstadoJob,
   EstadoSync,
@@ -122,9 +123,55 @@ export function crearRepositorioSqlite(opciones: OpcionesSqlite): Repositorio & 
     JOIN arca_user_clientes uc ON uc.cliente_id = c.id
     WHERE uc.usuario_id = ?`;
 
+  /**
+   * Acota una lectura a UNA de las empresas de la cuenta.
+   *
+   * Sin CUIT devuelve lo de la cuenta entera, que es lo que veia el detalle
+   * hasta ahora: la mezcla de todos los representados.
+   */
+  const filtroEmpresa = (cuit?: string) => (cuit ? ' AND contribuyente_cuit = ?' : '');
+  const argsEmpresa = (clienteId: string, cuit?: string) =>
+    cuit ? [clienteId, cuit] : [clienteId];
+
+  /**
+   * Las filas del panel: una por (cuenta, empresa).
+   *
+   * La razon social sale del cache del padron y cae al CUIT si todavia no se
+   * resolvio — mostrar el numero es peor que mostrar nada, pero mucho mejor que
+   * esconder la empresa.
+   */
+  const leerEmpresas = (donde: string, parametro: string): EmpresaRepresentada[] =>
+    todos<{
+      cliente_id: string;
+      cuit: string;
+      visto_en: string;
+      nombre: string | null;
+      cliente_cuit: string;
+      cliente_razon: string;
+    }>(
+      `SELECT r.cliente_id, r.cuit, r.visto_en,
+              p.nombre        AS nombre,
+              c.cuit          AS cliente_cuit,
+              c.razon_social  AS cliente_razon
+         FROM arca_representados r
+         JOIN arca_clientes c ON c.id = r.cliente_id
+         LEFT JOIN arca_contribuyentes p ON p.cuit = r.cuit
+         ${donde}
+        ORDER BY c.razon_social, p.nombre, r.cuit`,
+      parametro,
+    ).map<EmpresaRepresentada>((f) => ({
+      clienteId: f.cliente_id,
+      cuit: f.cuit,
+      nombre: f.nombre ?? f.cuit,
+      representante: { cuit: f.cliente_cuit, razonSocial: f.cliente_razon },
+      esTitular: f.cuit === f.cliente_cuit.replace(/\D/g, ''),
+      vistoEn: f.visto_en,
+    }));
+
   type FilaNotificacion = {
     id: string;
     cliente_id: string;
+    contribuyente_cuit: string;
     id_comunicacion: string;
     fecha: string;
     organismo: string;
@@ -142,12 +189,19 @@ export function crearRepositorioSqlite(opciones: OpcionesSqlite): Repositorio & 
     tamano: number;
   };
 
-  const leerNotificaciones = (clienteId: string, notificacionId?: string): Notificacion[] => {
+  const leerNotificaciones = (
+    clienteId: string,
+    notificacionId?: string,
+    contribuyenteCuit?: string,
+  ): Notificacion[] => {
     const filtroId = notificacionId ? ' AND id = ?' : '';
-    const args = notificacionId ? [clienteId, notificacionId] : [clienteId];
+    const filtroCuit = contribuyenteCuit ? ' AND contribuyente_cuit = ?' : '';
+    const args: string[] = [clienteId];
+    if (notificacionId) args.push(notificacionId);
+    if (contribuyenteCuit) args.push(contribuyenteCuit);
     const filas = todos<FilaNotificacion>(
       `SELECT * FROM arca_notificaciones
-        WHERE cliente_id = ?${filtroId}
+        WHERE cliente_id = ?${filtroId}${filtroCuit}
         ORDER BY fecha DESC`,
       ...args,
     );
@@ -179,6 +233,7 @@ export function crearRepositorioSqlite(opciones: OpcionesSqlite): Repositorio & 
       return {
         id: fila.id,
         clienteId: fila.cliente_id,
+        contribuyenteCuit: fila.contribuyente_cuit,
         idComunicacion: fila.id_comunicacion,
         fecha: fila.fecha,
         organismo: fila.organismo,
@@ -749,8 +804,50 @@ export function crearRepositorioSqlite(opciones: OpcionesSqlite): Repositorio & 
         : null;
     },
 
-    async notificacionesDe(clienteId) {
-      return leerNotificaciones(clienteId);
+    async empresasDe(clienteId) {
+      return leerEmpresas('WHERE r.cliente_id = ?', clienteId);
+    },
+
+    async empresasDeUsuario(usuarioId) {
+      // El JOIN con arca_user_clientes es el mismo aislamiento que el resto del
+      // repositorio: no hay forma de listar empresas de una cuenta ajena.
+      return leerEmpresas(
+        `WHERE r.cliente_id IN (SELECT cliente_id FROM arca_user_clientes WHERE usuario_id = ?)`,
+        usuarioId,
+      );
+    },
+
+    async registrarRepresentados(clienteId, servicio, cuits) {
+      const ahora = new Date().toISOString();
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        for (const cuit of cuits) {
+          const digitos = cuit.replace(/\D/g, '');
+          if (digitos.length !== 11) continue;
+          // Acumulativo: cada servicio ve su propia lista de delegaciones, y
+          // borrar las que este no ofrece haria desaparecer del panel empresas
+          // que si existen en otro. Solo se pisa `visto_en`.
+          correr(
+            `INSERT INTO arca_representados (cliente_id, cuit, visto_en, actualizado_en)
+             VALUES (?, ?, ?, ?)
+             ON CONFLICT (cliente_id, cuit) DO UPDATE
+                SET visto_en = excluded.visto_en,
+                    actualizado_en = excluded.actualizado_en`,
+            clienteId,
+            digitos,
+            servicio,
+            ahora,
+          );
+        }
+        db.exec('COMMIT');
+      } catch (error) {
+        db.exec('ROLLBACK');
+        throw error;
+      }
+    },
+
+    async notificacionesDe(clienteId, contribuyenteCuit) {
+      return leerNotificaciones(clienteId, undefined, contribuyenteCuit);
     },
 
     async marcarNotificacionVista(clienteId, notificacionId) {
@@ -812,17 +909,21 @@ export function crearRepositorioSqlite(opciones: OpcionesSqlite): Repositorio & 
     },
 
     async guardarNotificaciones(clienteId, notificaciones) {
+      // La clave lleva el contribuyente: el id de comunicacion solo es unico
+      // dentro de su buzon, y sin el CUIT dos empresas de la misma cuenta se
+      // pisarian entre si al contar insertadas contra actualizadas.
+      const clave = (cuit: string, idComunicacion: string) => `${cuit} ${idComunicacion}`;
       const existentes = new Set(
-        todos<{ id_comunicacion: string }>(
-          'SELECT id_comunicacion FROM arca_notificaciones WHERE cliente_id = ?',
+        todos<{ contribuyente_cuit: string; id_comunicacion: string }>(
+          'SELECT contribuyente_cuit, id_comunicacion FROM arca_notificaciones WHERE cliente_id = ?',
           clienteId,
-        ).map((fila) => fila.id_comunicacion),
+        ).map((fila) => clave(fila.contribuyente_cuit, fila.id_comunicacion)),
       );
       const guardarSinDetalle = db.prepare(
         `INSERT INTO arca_notificaciones
-           (id, cliente_id, id_comunicacion, fecha, organismo, asunto, leida)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT (cliente_id, id_comunicacion) DO UPDATE SET
+           (id, cliente_id, contribuyente_cuit, id_comunicacion, fecha, organismo, asunto, leida)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (cliente_id, contribuyente_cuit, id_comunicacion) DO UPDATE SET
            fecha = excluded.fecha,
            organismo = excluded.organismo,
            asunto = excluded.asunto,
@@ -830,18 +931,20 @@ export function crearRepositorioSqlite(opciones: OpcionesSqlite): Repositorio & 
       );
       const guardarConDetalle = db.prepare(
         `INSERT INTO arca_notificaciones
-           (id, cliente_id, id_comunicacion, fecha, organismo, asunto, leida, cuerpo)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT (cliente_id, id_comunicacion) DO UPDATE SET
+           (id, cliente_id, contribuyente_cuit, id_comunicacion, fecha, organismo, asunto, leida, cuerpo)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (cliente_id, contribuyente_cuit, id_comunicacion) DO UPDATE SET
            fecha = excluded.fecha,
            organismo = excluded.organismo,
            asunto = excluded.asunto,
            leida = MAX(arca_notificaciones.leida, excluded.leida),
            cuerpo = excluded.cuerpo`,
       );
+      // Con el CUIT: sin el, los adjuntos podrian colgarse de la comunicacion
+      // homonima de OTRA empresa de la misma cuenta.
       const idNotificacion = db.prepare(
         `SELECT id FROM arca_notificaciones
-          WHERE cliente_id = ? AND id_comunicacion = ?`,
+          WHERE cliente_id = ? AND contribuyente_cuit = ? AND id_comunicacion = ?`,
       );
       const borrarAdjuntos = db.prepare(
         'DELETE FROM arca_notificacion_adjuntos WHERE notificacion_id = ?',
@@ -856,10 +959,13 @@ export function crearRepositorioSqlite(opciones: OpcionesSqlite): Repositorio & 
       db.exec('BEGIN IMMEDIATE');
       try {
         for (const notificacion of notificaciones) {
-          const yaExistia = existentes.has(notificacion.idComunicacion);
+          const yaExistia = existentes.has(
+            clave(notificacion.contribuyenteCuit, notificacion.idComunicacion),
+          );
           const parametros = [
             randomUUID(),
             clienteId,
+            notificacion.contribuyenteCuit,
             notificacion.idComunicacion,
             notificacion.fecha,
             notificacion.organismo,
@@ -868,7 +974,11 @@ export function crearRepositorioSqlite(opciones: OpcionesSqlite): Repositorio & 
           ] as const;
           if (notificacion.detalle) {
             guardarConDetalle.run(...parametros, notificacion.detalle.cuerpo);
-            const fila = idNotificacion.get(clienteId, notificacion.idComunicacion) as
+            const fila = idNotificacion.get(
+              clienteId,
+              notificacion.contribuyenteCuit,
+              notificacion.idComunicacion,
+            ) as
               | { id: string }
               | undefined;
             if (!fila) throw new Error('No se pudo resolver la notificación recién guardada.');
@@ -900,7 +1010,7 @@ export function crearRepositorioSqlite(opciones: OpcionesSqlite): Repositorio & 
       return { insertadas, actualizadas };
     },
 
-    async saldosDe(clienteId) {
+    async saldosDe(clienteId, contribuyenteCuit) {
       return todos<{
         cliente_id: string;
         contribuyente_cuit: string;
@@ -916,9 +1026,9 @@ export function crearRepositorioSqlite(opciones: OpcionesSqlite): Repositorio & 
         interes_punitorio: number;
       }>(
         `SELECT * FROM arca_saldos
-          WHERE cliente_id = ?
+          WHERE cliente_id = ?${filtroEmpresa(contribuyenteCuit)}
           ORDER BY fecha_vencimiento, impuesto, periodo, anticipo_cuota`,
-        clienteId,
+        ...argsEmpresa(clienteId, contribuyenteCuit),
       ).map<SaldoTributario>((f) => ({
         clienteId: f.cliente_id,
         contribuyenteCuit: f.contribuyente_cuit,
@@ -970,10 +1080,11 @@ export function crearRepositorioSqlite(opciones: OpcionesSqlite): Repositorio & 
       return saldos.length;
     },
 
-    async planesDe(clienteId) {
+    async planesDe(clienteId, contribuyenteCuit) {
       const filas = todos<{
         id: string;
         cliente_id: string;
+        contribuyente_cuit: string;
         numero: string;
         concepto: string;
         fecha_presentacion: string | null;
@@ -989,7 +1100,11 @@ export function crearRepositorioSqlite(opciones: OpcionesSqlite): Repositorio & 
         proximo_vencimiento: string | null;
         total_pagado: number;
         leido_app_en: string | null;
-      }>('SELECT * FROM arca_planes WHERE cliente_id = ? ORDER BY fecha_presentacion DESC, numero', clienteId);
+      }>(
+        `SELECT * FROM arca_planes WHERE cliente_id = ?${filtroEmpresa(contribuyenteCuit)}
+          ORDER BY fecha_presentacion DESC, numero`,
+        ...argsEmpresa(clienteId, contribuyenteCuit),
+      );
       const cuotas = todos<{
         id: string;
         plan_id: string;
@@ -1024,6 +1139,7 @@ export function crearRepositorioSqlite(opciones: OpcionesSqlite): Repositorio & 
       return filas.map<PlanPago>((f) => ({
         id: f.id,
         clienteId: f.cliente_id,
+        contribuyenteCuit: f.contribuyente_cuit,
         numero: f.numero,
         concepto: f.concepto,
         fechaPresentacion: f.fecha_presentacion,
@@ -1055,7 +1171,7 @@ export function crearRepositorioSqlite(opciones: OpcionesSqlite): Repositorio & 
       return Number(resultado.changes) > 0 ? { leidoAppEn } : null;
     },
 
-    async vencimientosDe(clienteId) {
+    async vencimientosDe(clienteId, contribuyenteCuit) {
       return todos<{
         id: string;
         cliente_id: string;
@@ -1069,9 +1185,9 @@ export function crearRepositorioSqlite(opciones: OpcionesSqlite): Repositorio & 
         detalle: string;
       }>(
         `SELECT * FROM arca_vencimientos
-          WHERE cliente_id = ?
+          WHERE cliente_id = ?${filtroEmpresa(contribuyenteCuit)}
           ORDER BY contribuyente_cuit, fecha`,
-        clienteId,
+        ...argsEmpresa(clienteId, contribuyenteCuit),
       ).map<Vencimiento>((f) => ({
         id: f.id,
         clienteId: f.cliente_id,
@@ -1118,7 +1234,7 @@ export function crearRepositorioSqlite(opciones: OpcionesSqlite): Repositorio & 
       return vencimientos.length;
     },
 
-    async ddjjPendientesDe(clienteId) {
+    async ddjjPendientesDe(clienteId, contribuyenteCuit) {
       return todos<{
         id: string;
         cliente_id: string;
@@ -1131,9 +1247,9 @@ export function crearRepositorioSqlite(opciones: OpcionesSqlite): Repositorio & 
         fecha: string;
       }>(
         `SELECT * FROM arca_ddjj_pendientes
-          WHERE cliente_id = ?
+          WHERE cliente_id = ?${filtroEmpresa(contribuyenteCuit)}
           ORDER BY contribuyente_cuit, periodo DESC, impuesto`,
-        clienteId,
+        ...argsEmpresa(clienteId, contribuyenteCuit),
       ).map<DeclaracionJuradaPendiente>((fila) => ({
         id: fila.id,
         clienteId: fila.cliente_id,
@@ -1178,7 +1294,7 @@ export function crearRepositorioSqlite(opciones: OpcionesSqlite): Repositorio & 
       return declaraciones.length;
     },
 
-    async comprobantesDe(clienteId) {
+    async comprobantesDe(clienteId, contribuyenteCuit) {
       return todos<{
         id: string;
         cliente_id: string;
@@ -1195,8 +1311,9 @@ export function crearRepositorioSqlite(opciones: OpcionesSqlite): Repositorio & 
         iva: number;
         total: number;
       }>(
-        'SELECT * FROM arca_comprobantes WHERE cliente_id = ? ORDER BY fecha DESC',
-        clienteId,
+        `SELECT * FROM arca_comprobantes WHERE cliente_id = ?${filtroEmpresa(contribuyenteCuit)}
+          ORDER BY fecha DESC`,
+        ...argsEmpresa(clienteId, contribuyenteCuit),
       ).map<Comprobante>((f) => ({
         id: f.id,
         clienteId: f.cliente_id,
@@ -1269,11 +1386,11 @@ export function crearRepositorioSqlite(opciones: OpcionesSqlite): Repositorio & 
       );
       const insertarPlan = db.prepare(
         `INSERT INTO arca_planes
-           (id, cliente_id, numero, concepto, fecha_presentacion, fecha_consolidacion,
-            tipo_plan, monto_consolidado, estado, situacion, cuotas_totales,
-            cuotas_pagas, cuotas_impagas, monto_cuota, proximo_vencimiento, total_pagado,
-            leido_app_en)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           (id, cliente_id, contribuyente_cuit, numero, concepto, fecha_presentacion,
+            fecha_consolidacion, tipo_plan, monto_consolidado, estado, situacion,
+            cuotas_totales, cuotas_pagas, cuotas_impagas, monto_cuota,
+            proximo_vencimiento, total_pagado, leido_app_en)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       );
       const insertarCuota = db.prepare(
         `INSERT INTO arca_plan_cuotas
@@ -1292,6 +1409,7 @@ export function crearRepositorioSqlite(opciones: OpcionesSqlite): Repositorio & 
           insertarPlan.run(
             planId,
             clienteId,
+            plan.contribuyenteCuit,
             plan.numero,
             plan.concepto,
             plan.fechaPresentacion,
@@ -1333,7 +1451,8 @@ export function crearRepositorioSqlite(opciones: OpcionesSqlite): Repositorio & 
       return { planes: planes.length, cuotas: cantidadCuotas };
     },
 
-    async encolarSync(clienteId, modulo) {
+    async encolarSync(clienteId, modulo, contribuyenteCuit) {
+      const empresa = contribuyenteCuit?.replace(/\D/g, '') || null;
       db.exec('BEGIN IMMEDIATE');
       try {
         const activo = uno<{
@@ -1350,12 +1469,17 @@ export function crearRepositorioSqlite(opciones: OpcionesSqlite): Repositorio & 
           paso_actual: string | null;
           error: string | null;
         }>(
+          // El COALESCE separa por empresa: sincronizar la empresa A no debe
+          // devolver —ni bloquear— el job de la B de la misma cuenta. Que
+          // despues corran de a una lo garantiza `arca_sync_locks`.
           `SELECT * FROM arca_sync_jobs
             WHERE cliente_id = ?
               AND estado IN ('PENDING', 'RUNNING')
+              AND COALESCE(contribuyente_cuit, '') = ?
               AND (modulo = ? OR modulo = 'sincronizacion-completa' OR ? = 'sincronizacion-completa')
             ORDER BY creado_en LIMIT 1`,
           clienteId,
+          empresa ?? '',
           modulo,
           modulo,
         );
@@ -1375,12 +1499,13 @@ export function crearRepositorioSqlite(opciones: OpcionesSqlite): Repositorio & 
           progresoActual: 0,
           progresoTotal: modulo === 'sincronizacion-completa' ? 4 : 1,
           pasoActual: 'En cola',
+          ...(empresa ? { contribuyenteCuit: empresa } : {}),
         };
         correr(
           `INSERT INTO arca_sync_jobs
              (id, cliente_id, modulo, estado, intentos, creado_en,
-              progreso_actual, progreso_total, paso_actual)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              progreso_actual, progreso_total, paso_actual, contribuyente_cuit)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           job.id,
           job.clienteId,
           job.modulo,
@@ -1390,6 +1515,7 @@ export function crearRepositorioSqlite(opciones: OpcionesSqlite): Repositorio & 
           job.progresoActual,
           job.progresoTotal,
           job.pasoActual,
+          empresa,
         );
         correr(`UPDATE arca_clientes SET estado_sync = 'SINCRONIZANDO' WHERE id = ?`, clienteId);
         db.exec('COMMIT');
@@ -1829,15 +1955,18 @@ function sembrarSiVacia(db: DatabaseSync): void {
     for (const c of ['c1', 'c2']) asignar.run('u2', c);
 
     const notif = db.prepare(
-      `INSERT INTO arca_notificaciones (id, cliente_id, id_comunicacion, fecha, organismo, asunto, leida)
-       VALUES (?, ?, ?, ?, 'ARCA', ?, ?)`,
+      // El contribuyente sale del propio cliente: en los datos de demo cada
+      // cuenta se representa solo a si misma.
+      `INSERT INTO arca_notificaciones
+         (id, cliente_id, contribuyente_cuit, id_comunicacion, fecha, organismo, asunto, leida)
+       VALUES (?, ?, (SELECT cuit FROM arca_clientes WHERE id = ?), ?, ?, 'ARCA', ?, ?)`,
     );
-    notif.run('n1', 'c1', 'ARCA-1001', dia(-1), 'Intimación por falta de presentación — IVA 07/2026', 0);
-    notif.run('n2', 'c1', 'ARCA-1002', dia(-6), 'Constancia de presentación F.731', 1);
-    notif.run('n3', 'c2', 'ARCA-1003', dia(-2), 'Vista de actuaciones — Fiscalización electrónica', 0);
-    notif.run('n4', 'c2', 'ARCA-1004', dia(-3), 'Aviso de vencimiento de plan de facilidades', 0);
-    notif.run('n5', 'c3', 'ARCA-1005', dia(-9), 'Recategorización de Monotributo disponible', 1);
-    notif.run('n6', 'c4', 'ARCA-1006', dia(-4), 'Notificación de deuda — Aportes Seguridad Social', 0);
+    notif.run('n1', 'c1', 'c1', 'ARCA-1001', dia(-1), 'Intimación por falta de presentación — IVA 07/2026', 0);
+    notif.run('n2', 'c1', 'c1', 'ARCA-1002', dia(-6), 'Constancia de presentación F.731', 1);
+    notif.run('n3', 'c2', 'c2', 'ARCA-1003', dia(-2), 'Vista de actuaciones — Fiscalización electrónica', 0);
+    notif.run('n4', 'c2', 'c2', 'ARCA-1004', dia(-3), 'Aviso de vencimiento de plan de facilidades', 0);
+    notif.run('n5', 'c3', 'c3', 'ARCA-1005', dia(-9), 'Recategorización de Monotributo disponible', 1);
+    notif.run('n6', 'c4', 'c4', 'ARCA-1006', dia(-4), 'Notificación de deuda — Aportes Seguridad Social', 0);
 
     const saldo = db.prepare(
       `INSERT INTO arca_saldos
@@ -1855,12 +1984,13 @@ function sembrarSiVacia(db: DatabaseSync): void {
 
     const plan = db.prepare(
       `INSERT INTO arca_planes
-         (id, cliente_id, numero, concepto, cuotas_totales, cuotas_pagas, cuotas_impagas, monto_cuota, proximo_vencimiento)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         (id, cliente_id, contribuyente_cuit, numero, concepto, cuotas_totales,
+          cuotas_pagas, cuotas_impagas, monto_cuota, proximo_vencimiento)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
-    plan.run('p1', 'c1', 'RG 5321 — 000148223', 'IVA 2025 — Moratoria', 24, 14, 0, 187_400, dia(9));
-    plan.run('p2', 'c2', 'RG 4268 — 000097431', 'Ganancias 2024', 12, 7, 2, 342_800, dia(-5));
-    plan.run('p3', 'c4', 'RG 5321 — 000151980', 'Seguridad Social 2025', 36, 4, 3, 96_250, dia(-18));
+    plan.run('p1', 'c1', cuitDe('c1'), 'RG 5321 — 000148223', 'IVA 2025 — Moratoria', 24, 14, 0, 187_400, dia(9));
+    plan.run('p2', 'c2', cuitDe('c2'), 'RG 4268 — 000097431', 'Ganancias 2024', 12, 7, 2, 342_800, dia(-5));
+    plan.run('p3', 'c4', cuitDe('c4'), 'RG 5321 — 000151980', 'Seguridad Social 2025', 36, 4, 3, 96_250, dia(-18));
 
     const venc = db.prepare(
       `INSERT INTO arca_vencimientos
@@ -1936,6 +2066,7 @@ function aSyncJob(f: {
   paso_actual?: string | null;
   error: string | null;
   solicitud_id?: string | null;
+  contribuyente_cuit?: string | null;
 }): SyncJob {
   const job: SyncJob = {
     id: f.id,
@@ -1952,5 +2083,6 @@ function aSyncJob(f: {
   if (f.error) job.error = f.error;
   if (f.paso_actual) job.pasoActual = f.paso_actual;
   if (f.solicitud_id) job.solicitudId = f.solicitud_id;
+  if (f.contribuyente_cuit) job.contribuyenteCuit = f.contribuyente_cuit;
   return job;
 }
