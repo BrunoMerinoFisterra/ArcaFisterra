@@ -171,6 +171,15 @@ export const CUENTAS_TRIBUTARIAS = {
   servicio: 'Sistema de Cuentas Tributarias',
   urlServicio: /ctacte\.cloud\.afip\.gob\.ar\/contribuyente\//i,
   selectorCuit: '#cuitForm select[name="$PropertySelection"]',
+  /**
+   * CUIT del contribuyente que el servicio ya tiene activo.
+   *
+   * Cuando la clave representa a UNO solo, ARCA no dibuja `selectorCuit`: entra
+   * directo posicionado y lo unico que queda en pantalla es este cartel. Sirve
+   * para confirmar por CUIT exacto que estamos parados donde corresponde, que
+   * es la unica forma admitida de decidirlo.
+   */
+  cuitActivo: 'span.cuit',
   iframe: 'iframe[src*="homeContribuyente"]',
   tabVencimientos: 'a[role="tab"]:has-text("Vencimientos")',
   tabVencimientosActivo: 'a[role="tab"][aria-selected="true"]:has-text("Vencimientos")',

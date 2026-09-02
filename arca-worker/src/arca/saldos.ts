@@ -50,7 +50,7 @@ export async function extraerCuentasTributarias(
 ): Promise<DatosCuentasTributarias> {
   const vista = await abrirServicio(page, usuarioCuit, clave);
   try {
-    const cuits = await listarCuits(vista);
+    const cuits = await contribuyentesDisponibles(vista);
     const cuitPadre = soloDigitos(cuitCliente);
     if (!cuits.some((opcion) => opcion.cuit === cuitPadre)) {
       throw new ArcaError(
@@ -264,14 +264,36 @@ async function abrirServicio(page: Page, usuarioCuit: string, clave: string): Pr
   return vista;
 }
 
-async function seleccionarCuit(vista: Page, cuitCliente: string): Promise<void> {
+export async function seleccionarCuit(
+  vista: Page,
+  cuitCliente: string,
+  // Parametrizado solo para que los tests no paguen la espera real; en el
+  // worker siempre corre con el default.
+  esperaComboMs: number = ESPERA_COMBO_CUIT_MS,
+): Promise<void> {
   const esperado = soloDigitos(cuitCliente);
   if (esperado.length !== 11) {
     throw new ArcaError('DESCONOCIDO', `CUIT de cliente inválido: ${cuitCliente}`);
   }
 
   const selector = vista.locator(CUENTAS_TRIBUTARIAS.selectorCuit);
-  const opciones = await listarCuits(vista);
+  const opciones = await listarCuits(vista, esperaComboMs);
+
+  // Sin combo: la clave representa a uno solo y ARCA entro ya posicionado. No
+  // alcanza con asumir que es el nuestro —seria elegir al representado sin
+  // mirar el CUIT, justo lo que el resto del worker evita—, asi que se exige la
+  // misma coincidencia exacta contra el cartel que el servicio deja en pantalla.
+  if (opciones === null) {
+    const activo = await cuitActivoEnPantalla(vista);
+    if (activo === esperado) return;
+    throw new ArcaError(
+      'REPRESENTADO_NO_DISPONIBLE',
+      activo
+        ? `Cuentas Tributarias entro con el CUIT ${activo} y no ofrece cambiarlo por ${esperado}`
+        : `Cuentas Tributarias no ofrece elegir contribuyente ni informa cual tiene activo`,
+    );
+  }
+
   const opcion = opciones.find((candidata) => candidata.cuit === esperado);
   if (!opcion) {
     throw new ArcaError(
@@ -296,9 +318,57 @@ async function seleccionarCuit(vista: Page, cuitCliente: string): Promise<void> 
   }
 }
 
-async function listarCuits(vista: Page): Promise<OpcionCuit[]> {
+/**
+ * Los contribuyentes que hay para recorrer, venga la pantalla con combo o sin el.
+ *
+ * Sin combo la lista es de uno: el que el servicio ya tiene activo. Se lo lee
+ * del cartel en vez de asumir que es el cliente, porque quien decide si
+ * corresponde es la comparacion por CUIT exacto que hace el llamador.
+ */
+async function contribuyentesDisponibles(vista: Page): Promise<OpcionCuit[]> {
+  const combo = await listarCuits(vista, ESPERA_COMBO_CUIT_MS);
+  if (combo !== null) return combo;
+
+  const activo = await cuitActivoEnPantalla(vista);
+  if (!activo) {
+    throw new ArcaError(
+      'REPRESENTADO_NO_DISPONIBLE',
+      'Cuentas Tributarias no ofrece elegir contribuyente ni informa cual tiene activo',
+    );
+  }
+  return [{ value: '', cuit: activo }];
+}
+
+/**
+ * CUIT que el servicio muestra como activo, o `''` si no lo informa.
+ *
+ * Exige que el cartel sea uno solo: con varios no hay forma de saber cual manda,
+ * y adivinar seria elegir al representado a ciegas.
+ */
+async function cuitActivoEnPantalla(vista: Page): Promise<string> {
+  const cartel = vista.locator(CUENTAS_TRIBUTARIAS.cuitActivo);
+  if ((await cartel.count()) !== 1) return '';
+  return soloDigitos((await cartel.textContent()) ?? '');
+}
+
+/**
+ * Cuanto se espera al combo de contribuyentes antes de dar por hecho que esta
+ * pantalla no lo tiene. Sin este tope heredaba el default del contexto (30 s) y
+ * una clave con un solo representado —que nunca va a ver el combo— terminaba en
+ * un TimeoutError de Playwright, reportado como "el portal tardo demasiado" con
+ * reaccion REINTENTAR. El reintento fallaba igual: la condicion es estable, no
+ * lentitud del portal.
+ */
+const ESPERA_COMBO_CUIT_MS = 8_000;
+
+/** Los contribuyentes del combo, o `null` si esta pantalla no lo trae. */
+async function listarCuits(vista: Page, esperaMs: number): Promise<OpcionCuit[] | null> {
   const selector = vista.locator(CUENTAS_TRIBUTARIAS.selectorCuit);
-  await selector.waitFor();
+  try {
+    await selector.waitFor({ timeout: esperaMs });
+  } catch {
+    return null;
+  }
   if ((await selector.count()) !== 1) {
     throw new ArcaError('SELECTOR_NO_ENCONTRADO', 'selector de CUIT de Cuentas Tributarias');
   }
