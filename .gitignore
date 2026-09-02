@@ -27,7 +27,16 @@
 # Certificado raiz de la CA local de Caddy. No es secreto (la clave privada
 # queda en el volumen caddy_data), pero es propio de CADA instalacion: si se
 # versiona, cada clon se lleva la CA de otra maquina.
+#
+# El .crt suelto en la raiz es el mismo artefacto, exportado a mano para
+# instalarlo en un navegador. Va anclado con "/" para no tapar un certificado
+# que en el futuro si haga falta versionar mas adentro del arbol.
 /deploy/certificados/
+/*.crt
+
+# Copias comprimidas del proyecto. Es el repo adentro del repo: versionarlas
+# duplica todo el arbol en cada commit y el .zip ni siquiera se puede diffear.
+/*.zip
 
 # Config local de Claude Code (permisos de esta maquina/sesion). No es un
 # secreto, pero es de esta maquina — no del proyecto.
