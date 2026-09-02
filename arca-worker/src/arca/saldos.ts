@@ -129,32 +129,72 @@ async function leerMarcoCuentas(
   if (cantidadTabsVencimientos > 1) {
     throw new ArcaError('SELECTOR_NO_ENCONTRADO', 'pestaña Vencimientos ambigua en Cuentas Tributarias');
   }
-  if (cantidadTabsVencimientos === 1) {
-    const tabVencimientosActivo = marco.locator(CUENTAS_TRIBUTARIAS.tabVencimientosActivo);
-    if ((await tabVencimientosActivo.count()) !== 1) {
-      await tabVencimientos.click();
-      await tabVencimientosActivo.waitFor();
-    }
-  }
+  // Cuando el contribuyente no tiene vencimientos, ARCA deja la pestaña en el
+  // DOM pero DESHABILITADA: `aria-disabled="true"`, su panel en `display:none`
+  // y adentro la tabla con una `b-table-empty-row`. Es decir, la tabla existe y
+  // nunca se vuelve visible. Sin este chequeo, el `waitFor({visible})` de abajo
+  // heredaba los 30 s del contexto y el modulo entero moria con "el portal
+  // tardo demasiado" — para un contribuyente que simplemente no debe nada.
+  //
+  // Deudas ya se leia asi, con `controlHabilitado`. Esto lo empareja.
+  const vencimientosHabilitados =
+    cantidadTabsVencimientos === 0 || (await controlHabilitado(tabVencimientos));
 
-  // ARCA oculta el tab "Vencimientos" para algunos contribuyentes y deja la
-  // tabla como contenido inicial. La tabla visible existe en ambas variantes.
-  const tablaVencimientos = tablaVencimientosVisible;
-  await tablaVencimientos.waitFor({ state: 'visible' });
-  const panelVencimientos = marco.locator(CUENTAS_TRIBUTARIAS.panelActivo);
-  const contenedorVencimientos =
-    (await panelVencimientos.count()) === 1 ? panelVencimientos : marco.locator('body');
-  await mostrarTodasLasFilas(contenedorVencimientos, vista);
-  const filasVencimientos = await tablaVencimientos
-    .locator('tbody tr:not(.b-table-empty-row)')
-    .evaluateAll((elementos) =>
-      elementos.map((fila) =>
-        Array.from(fila.querySelectorAll('td')).map((celda) => celda.textContent ?? ''),
-      ),
-    );
-  const vencimientos = filasVencimientos
-    .map((celdas) => vencimientoDesdeCeldas(celdas))
-    .filter((vencimiento): vencimiento is VencimientoExtraido => vencimiento !== null);
+  let vencimientos: VencimientoExtraido[] = [];
+  if (vencimientosHabilitados) {
+    if (cantidadTabsVencimientos === 1) {
+      const tabVencimientosActivo = marco.locator(CUENTAS_TRIBUTARIAS.tabVencimientosActivo);
+      if ((await tabVencimientosActivo.count()) !== 1) {
+        await tabVencimientos.click();
+        await tabVencimientosActivo.waitFor();
+      }
+    }
+
+    // ARCA oculta el tab "Vencimientos" para algunos contribuyentes y deja la
+    // tabla como contenido inicial. La tabla visible existe en ambas variantes.
+    const tablaVencimientos = tablaVencimientosVisible;
+    const panelVencimientos = marco.locator(CUENTAS_TRIBUTARIAS.panelActivo);
+
+    let hayTabla = true;
+    try {
+      await tablaVencimientos.waitFor({ state: 'visible', timeout: ESPERA_TABLA_MS });
+    } catch {
+      // Con cero vencimientos ARCA a veces no dibuja NINGUNA tabla: la pestaña
+      // queda habilitada y activa, y el panel simplemente vacio. Esperar la
+      // tabla ahi no termina nunca.
+      //
+      // Que no haya tabla no se puede tomar como "cero" a la ligera: si la
+      // hubiera y solo estuviera tardando, devolver vacio borraria vencimientos
+      // reales del tablero. Por eso se distingue: sin ninguna tabla en el panel
+      // activo, no hay nada que leer y seguimos con Deudas y DDJJ; con una
+      // tabla que existe pero no aparece, el problema es otro y hay que verlo.
+      const tablasEnPanel =
+        (await panelVencimientos.count()) === 1
+          ? await panelVencimientos.locator('table').count()
+          : await marco.locator('table').count();
+      if (tablasEnPanel > 0) throw new ArcaError('TIMEOUT', 'la tabla de Vencimientos no aparecio');
+      hayTabla = false;
+      console.log('        sin vencimientos (la pestaña no publica tabla)');
+    }
+
+    if (hayTabla) {
+      const contenedorVencimientos =
+        (await panelVencimientos.count()) === 1 ? panelVencimientos : marco.locator('body');
+      await mostrarTodasLasFilas(contenedorVencimientos, vista);
+      const filasVencimientos = await tablaVencimientos
+        .locator('tbody tr:not(.b-table-empty-row)')
+        .evaluateAll((elementos) =>
+          elementos.map((fila) =>
+            Array.from(fila.querySelectorAll('td')).map((celda) => celda.textContent ?? ''),
+          ),
+        );
+      vencimientos = filasVencimientos
+        .map((celdas) => vencimientoDesdeCeldas(celdas))
+        .filter((vencimiento): vencimiento is VencimientoExtraido => vencimiento !== null);
+    }
+  } else {
+    console.log('        sin vencimientos (ARCA deshabilito la pestaña)');
+  }
 
   const tabDeudas = marco.locator(CUENTAS_TRIBUTARIAS.tabDeudas);
   await tabDeudas.waitFor();
@@ -228,7 +268,7 @@ async function mostrarTodasLasFilas(
   }
 }
 
-async function controlHabilitado(control: ReturnType<Frame['locator']>): Promise<boolean> {
+export async function controlHabilitado(control: ReturnType<Frame['locator']>): Promise<boolean> {
   return (
     (await control.getAttribute('aria-disabled')) !== 'true' &&
     !(await control.evaluate((elemento) => elemento.classList.contains('disabled')))
@@ -360,6 +400,14 @@ async function cuitActivoEnPantalla(vista: Page): Promise<string> {
  * lentitud del portal.
  */
 const ESPERA_COMBO_CUIT_MS = 8_000;
+
+/**
+ * Tope para que una tabla del servicio aparezca. Explicito y no el default del
+ * contexto (30 s): estas esperas son contra contenido que ARCA puede
+ * legitimamente no tener, y treinta segundos mudos por cada una convierten un
+ * "no hay datos" en un timeout del job entero.
+ */
+const ESPERA_TABLA_MS = 10_000;
 
 /** Los contribuyentes del combo, o `null` si esta pantalla no lo trae. */
 async function listarCuits(vista: Page, esperaMs: number): Promise<OpcionCuit[] | null> {

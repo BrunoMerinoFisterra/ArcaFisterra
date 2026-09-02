@@ -149,6 +149,29 @@ const FRASES: ReadonlyArray<readonly [string, ArcaErrorCode]> = [
   ['tareas de mantenimiento', 'PORTAL_NO_DISPONIBLE'],
 ];
 
+/**
+ * ¿Esta falla corta toda la sincronizacion, o es sólo de ese modulo?
+ *
+ * Corta lo que invalida la sesion o la credencial. Seguir con una clave
+ * incorrecta es la via rapida a que ARCA bloquee la cuenta del contribuyente,
+ * y seguir con un CAPTCHA o un segundo factor delante es gastar logins al
+ * pedo: los modulos que faltan van a chocar contra la misma pantalla.
+ *
+ * El resto —representado no disponible, servicio no adherido, selectores,
+ * timeouts— habla de UN servicio y no dice nada de los siguientes. Una empresa
+ * puede tener delegado Cuentas Tributarias y no Mis Facilidades: cortar ahi
+ * dejaba sin sincronizar tambien a los modulos posteriores, que si andaban.
+ */
+export function cortaLaCorrida(error: unknown): boolean {
+  if (!(error instanceof ArcaError)) return false;
+  return (
+    error.reaccion === 'FRENAR_MARCAR_CREDENCIAL' ||
+    error.code === 'CLAVE_VENCIDA' ||
+    error.code === 'CAPTCHA_PRESENTE' ||
+    error.code === 'SEGUNDO_FACTOR'
+  );
+}
+
 /** Minusculas y sin acentos, para comparar contra FRASES. */
 export function normalizar(texto: string): string {
   return texto
