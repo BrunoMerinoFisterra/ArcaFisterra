@@ -77,12 +77,36 @@ try {
   if (soloChequeo) {
     console.log('  configuracion y base local: OK');
   } else {
-    const ahora = new Date().toISOString();
-    const limiteInterrumpidos = new Date(Date.now() - config.jobTimeoutMs).toISOString();
-    const recuperados = await repo.recuperarJobsInterrumpidos(ahora, limiteInterrumpidos);
-    if (recuperados > 0) console.warn(`  ${recuperados} job(s) interrumpidos fueron cerrados`);
+    /**
+     * Cada cuanto se buscan jobs abandonados.
+     *
+     * Antes esto corria UNA sola vez, aca arriba, antes del `while`. Un worker
+     * que muere con un job en curso —un deploy, un OOM, un reinicio de la VM—
+     * dejaba ese job en RUNNING con el lease vencido y NADIE lo reclamaba hasta
+     * el proximo arranque. El cliente quedaba clavado en SINCRONIZANDO y el
+     * indice `ux_jobs_cliente_modulo_activo` le impedia encolar otro del mismo
+     * modulo: sin tocar la base a mano, no volvia a sincronizar nunca.
+     *
+     * No va en cada vuelta del poll porque son 3 s: con varios workers seria un
+     * UPDATE constante sobre la cola para no encontrar nada casi siempre.
+     */
+    const RECUPERACION_CADA_MS = 60_000;
+    let proximaRecuperacion = 0;
+
+    const recuperarAbandonados = async () => {
+      proximaRecuperacion = Date.now() + RECUPERACION_CADA_MS;
+      const recuperados = await repo.recuperarJobsInterrumpidos(
+        new Date().toISOString(),
+        new Date(Date.now() - config.jobTimeoutMs).toISOString(),
+      );
+      if (recuperados > 0) console.warn(`  ${recuperados} job(s) interrumpidos fueron cerrados`);
+    };
 
     while (!detener) {
+      // La primera vuelta cubre el arranque, que es cuando mas jobs huerfanos
+      // hay: los que dejo tirados el proceso anterior.
+      if (Date.now() >= proximaRecuperacion) await recuperarAbandonados();
+
       const instante = Date.now();
       const job = await repo.tomarProximoJob(
         workerId,
