@@ -20,7 +20,7 @@ import { extraerPlanesFacilidades } from './arca/facilidades.js';
 import { extraerNotificacionesDfe } from './arca/domicilio-fiscal.js';
 import { extraerCuentasTributarias } from './arca/saldos.js';
 import { verificarAccesoAContribuyente } from './arca/verificar-acceso.js';
-import { ArcaError } from './arca/errors.js';
+import { ArcaError, cortaLaCorrida } from './arca/errors.js';
 import { login } from './arca/login.js';
 import { PORTAL, URLS } from './arca/selectors.js';
 import { leerComprobantesDesdeArchivo } from './arca/csv.js';
@@ -246,6 +246,7 @@ async function procesar(job: SyncJob, cfg: ConfigWorker, propietario: string): P
       job.modulo === 'sincronizacion-completa'
         ? MODULOS_COMPLETOS
         : [job.modulo as ModuloSincronizable];
+    const fallidos: Array<{ modulo: ModuloSincronizable; resultado: ResultadoJob }> = [];
     for (let indice = 0; indice < modulos.length; indice += 1) {
       if (leasePerdido) throw new Error('El worker perdio la propiedad del trabajo.');
       const modulo = modulos[indice]!;
@@ -255,7 +256,20 @@ async function procesar(job: SyncJob, cfg: ConfigWorker, propietario: string): P
         paso: ETIQUETAS_MODULO[modulo],
       }, propietario);
       console.log(`  [${indice + 1}/${modulos.length}] ${ETIQUETAS_MODULO[modulo]}...`);
-      await procesarModulo(modulo, cliente, acceso, sesion, sesionPath, cfg);
+      try {
+        await procesarModulo(modulo, cliente, acceso, sesion, sesionPath, cfg);
+      } catch (error) {
+        // Con un solo modulo no hay nada que salvar, y ciertas fallas invalidan
+        // la sesion o la credencial: esas cortan igual. El resto es de ESE
+        // servicio y no dice nada de los que faltan — una empresa puede tener
+        // delegado Cuentas Tributarias y no Mis Facilidades, y antes ese caso
+        // se llevaba puestos tambien los modulos posteriores, que si andaban.
+        if (modulos.length === 1 || cortaLaCorrida(error)) throw error;
+        const parcial = resultadoDeError(error);
+        fallidos.push({ modulo, resultado: parcial });
+        console.error(`      FALLO en este modulo — ${parcial.detalle}`);
+        volcarDetalle(error);
+      }
       await repo.actualizarProgresoJob(job.id, {
         actual: indice + 1,
         total: modulos.length,
@@ -263,8 +277,26 @@ async function procesar(job: SyncJob, cfg: ConfigWorker, propietario: string): P
       }, propietario);
     }
     clearInterval(latido);
-    await repo.finalizarJob(job.id, { estado: 'DONE' }, propietario);
-    console.log(`  OK — ${modulos.length} módulo(s) completados`);
+    if (fallidos.length === 0) {
+      await repo.finalizarJob(job.id, { estado: 'DONE' }, propietario);
+      console.log(`  OK — ${modulos.length} módulo(s) completados`);
+    } else {
+      // El job NO queda en DONE: algo hay que mirar. Pero los modulos que si
+      // corrieron ya guardaron sus datos, y el detalle dice cuales fallaron
+      // para que el contador no salga a buscar a ciegas.
+      const necesitaHumano = fallidos.some((f) => f.resultado.estado === 'NEEDS_HUMAN');
+      const completados = modulos.length - fallidos.length;
+      const detalle =
+        fallidos
+          .map((f) => `${ETIQUETAS_MODULO[f.modulo]}: ${f.resultado.detalle ?? 'falló'}`)
+          .join(' ') + ` (los otros ${completados} módulo(s) sí se sincronizaron)`;
+      await repo.finalizarJob(
+        job.id,
+        { estado: necesitaHumano ? 'NEEDS_HUMAN' : 'ERROR', detalle },
+        propietario,
+      );
+      console.warn(`  PARCIAL — ${completados}/${modulos.length} módulo(s) completados`);
+    }
   } catch (error) {
     if (sesion) {
       const pagina = sesion.context.pages().find((p) => !p.isClosed());
@@ -274,20 +306,13 @@ async function procesar(job: SyncJob, cfg: ConfigWorker, propietario: string): P
     clearInterval(latido);
     await repo.finalizarJob(job.id, resultado, propietario);
     console.error(`  FALLO — ${resultado.detalle}`);
-    // El contador ve el mensaje del catalogo, que es igual para todo el codigo:
+    // El contador ve el mensaje del catalogo, que es igual para todo un codigo:
     // dos causas muy distintas se leen identicas. El detalle crudo no viaja a la
     // base —ahi va `mensajeUsuario`— pero en el log es lo unico que dice DONDE
     // fue, y sin el cada diagnostico obliga a reconstruirlo desde los artifacts.
-    if (error instanceof ArcaError && error.detalle) {
-      console.error(`           detalle: [${error.code}] ${error.detalle}`);
-    } else if (error instanceof Error) {
-      // Un TimeoutError pelado de Playwright no es ArcaError, y su mensaje trae
-      // MAS que la primera linea: abajo va el call log, donde Playwright dice
-      // que elemento se interpuso ("<div …> intercepts pointer events"). Quedarse
-      // con la primera linea deja "Timeout 30000ms exceeded" y nada mas, que no
-      // alcanza para saber contra que estabas peleando.
-      console.error(`           detalle: ${error.message}`);
-    }
+    // De un TimeoutError pelado va el mensaje ENTERO: abajo de la primera linea
+    // esta el call log de Playwright, que nombra al elemento que se interpuso.
+    volcarDetalle(error);
   } finally {
     clearInterval(latido);
     acceso.clave = '';
@@ -525,6 +550,15 @@ async function procesarModulo(
     }
   }
   console.log(`      ${insertados} nuevos, ${repetidos} ya existentes`);
+}
+
+/** El detalle crudo al log. Ver el comentario del catch de `procesar`. */
+function volcarDetalle(error: unknown): void {
+  if (error instanceof ArcaError && error.detalle) {
+    console.error(`           detalle: [${error.code}] ${error.detalle}`);
+  } else if (error instanceof Error) {
+    console.error(`           detalle: ${error.message}`);
+  }
 }
 
 function resultadoDeError(error: unknown): ResultadoJob {
