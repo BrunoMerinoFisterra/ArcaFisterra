@@ -257,10 +257,12 @@ async function procesar(job: SyncJob, cfg: ConfigWorker, propietario: string): P
     if (error instanceof ArcaError && error.detalle) {
       console.error(`           detalle: [${error.code}] ${error.detalle}`);
     } else if (error instanceof Error) {
-      // Un TimeoutError pelado de Playwright no es ArcaError y su mensaje trae
-      // el selector que estaba esperando: sin esto, "tardo demasiado" no dice
-      // cual de las veinte esperas del modulo fue.
-      console.error(`           detalle: ${error.message.split('\n')[0]}`);
+      // Un TimeoutError pelado de Playwright no es ArcaError, y su mensaje trae
+      // MAS que la primera linea: abajo va el call log, donde Playwright dice
+      // que elemento se interpuso ("<div …> intercepts pointer events"). Quedarse
+      // con la primera linea deja "Timeout 30000ms exceeded" y nada mas, que no
+      // alcanza para saber contra que estabas peleando.
+      console.error(`           detalle: ${error.message}`);
     }
   } finally {
     clearInterval(latido);

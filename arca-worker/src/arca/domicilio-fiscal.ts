@@ -273,6 +273,13 @@ function numeroSeguro(valor: unknown): number {
  * El boton es siempre la accion pasiva. En el de oficio eso es CERRAR y jamas
  * VISUALIZAR, que abriria la comunicacion en ARCA y la perfeccionaria.
  */
+/**
+ * Cuantas veces se tolera que un aviso tape a otro antes de cortar. Con dos
+ * avisos alcanzan dos vueltas; el margen es para que un tercero no invente un
+ * bucle infinito entre avisos que se pisan.
+ */
+const MAX_CHOQUES_AVISOS = 6;
+
 const AVISOS_DFE = [
   {
     frase: 'Notificaciones de oficio',
@@ -294,6 +301,7 @@ export async function cerrarAvisosDfe(
 ): Promise<boolean> {
   const limite = Date.now() + esperarHastaMs;
   let cerrado = false;
+  let choques = 0;
   do {
     // Se cierra SIEMPRE el de mas arriba, que es el ultimo del DOM: cada modal
     // dibuja su backdrop encima de los anteriores. Cuando ARCA los abre a la
@@ -316,16 +324,21 @@ export async function cerrarAvisosDfe(
         try {
           await boton.click({ timeout: ACCION_DFE_MS });
         } catch {
-          // Con los dos avisos apilados, el backdrop que ARCA inserta despues
-          // del modal de arriba termina tapando su propio boton: el click no
-          // llega a ser accionable nunca y antes se comia los 30 s del
-          // contexto. ESCAPE no sirve —estos modales no cierran con teclado—,
-          // asi que se despacha el click sobre el boton salteando el chequeo de
-          // interposicion. Sigue siendo el mismo boton, localizado por su rol y
-          // su nombre dentro de ESTE modal: no hay forma de que caiga en
-          // VISUALIZAR ni en ENTENDIDO.
-          console.log('      aviso tapado por su backdrop; se cierra forzando el click');
-          await boton.click({ force: true, timeout: ACCION_DFE_MS });
+          // ARCA abrio OTRO aviso encima mientras clickeabamos este, y su
+          // footer se interpuso. No se fuerza el click: bootstrap-vue ignora la
+          // interaccion con un modal que dejo de ser el de arriba, asi que
+          // insistir sobre el tapado no lo cierra ni forzandolo. Se vuelve a
+          // empezar la vuelta, que recuenta y elige al nuevo — el de abajo
+          // queda para la siguiente, cuando ya no tenga nada encima.
+          choques += 1;
+          if (choques > MAX_CHOQUES_AVISOS) {
+            throw new ArcaError(
+              'TIMEOUT',
+              `Los avisos del DFE se taparon entre si ${choques} veces seguidas`,
+            );
+          }
+          console.log('      otro aviso se abrio encima; se cierra ese primero');
+          continue;
         }
         await cima.waitFor({ state: 'hidden', timeout: 10_000 });
         cerrado = true;
