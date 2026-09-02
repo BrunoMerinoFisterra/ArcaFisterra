@@ -250,6 +250,18 @@ async function procesar(job: SyncJob, cfg: ConfigWorker, propietario: string): P
     clearInterval(latido);
     await repo.finalizarJob(job.id, resultado, propietario);
     console.error(`  FALLO — ${resultado.detalle}`);
+    // El contador ve el mensaje del catalogo, que es igual para todo el codigo:
+    // dos causas muy distintas se leen identicas. El detalle crudo no viaja a la
+    // base —ahi va `mensajeUsuario`— pero en el log es lo unico que dice DONDE
+    // fue, y sin el cada diagnostico obliga a reconstruirlo desde los artifacts.
+    if (error instanceof ArcaError && error.detalle) {
+      console.error(`           detalle: [${error.code}] ${error.detalle}`);
+    } else if (error instanceof Error) {
+      // Un TimeoutError pelado de Playwright no es ArcaError y su mensaje trae
+      // el selector que estaba esperando: sin esto, "tardo demasiado" no dice
+      // cual de las veinte esperas del modulo fue.
+      console.error(`           detalle: ${error.message.split('\n')[0]}`);
+    }
   } finally {
     clearInterval(latido);
     acceso.clave = '';

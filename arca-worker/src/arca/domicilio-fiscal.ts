@@ -91,7 +91,9 @@ export async function extraerNotificacionesDfe(
     await cerrarAvisosDfe(vista, 3_000);
     const porPagina = vista.locator(`${panel} #per-page-select`);
     if ((await porPagina.count()) === 1) {
-      await porPagina.selectOption('100');
+      await accionDfe(vista, 'elegir 100 por pagina', () =>
+        porPagina.selectOption('100', { timeout: ACCION_DFE_MS }),
+      );
       await esperarTablaLista(vista, panel);
       await cerrarAvisosDfe(vista, 1_000);
     }
@@ -108,7 +110,9 @@ export async function extraerNotificacionesDfe(
       const siguiente = vista.locator(`${panel} button.pagination-button`).last();
       if ((await siguiente.count()) !== 1 || (await siguiente.isDisabled())) break;
       const primeraAnterior = filas[0]?.idComunicacion ?? '';
-      await siguiente.click();
+      await accionDfe(vista, `pagina ${pagina + 2}`, () =>
+        siguiente.click({ timeout: ACCION_DFE_MS }),
+      );
       await esperarCambioPagina(vista, panel, primeraAnterior);
       await cerrarAvisosDfe(vista, 500);
     }
@@ -309,7 +313,20 @@ export async function cerrarAvisosDfe(
         if ((await boton.count()) !== 1) {
           throw new ArcaError('SELECTOR_NO_ENCONTRADO', aviso.sinBoton);
         }
-        await boton.click();
+        try {
+          await boton.click({ timeout: ACCION_DFE_MS });
+        } catch {
+          // Con los dos avisos apilados, el backdrop que ARCA inserta despues
+          // del modal de arriba termina tapando su propio boton: el click no
+          // llega a ser accionable nunca y antes se comia los 30 s del
+          // contexto. ESCAPE no sirve —estos modales no cierran con teclado—,
+          // asi que se despacha el click sobre el boton salteando el chequeo de
+          // interposicion. Sigue siendo el mismo boton, localizado por su rol y
+          // su nombre dentro de ESTE modal: no hay forma de que caiga en
+          // VISUALIZAR ni en ENTENDIDO.
+          console.log('      aviso tapado por su backdrop; se cierra forzando el click');
+          await boton.click({ force: true, timeout: ACCION_DFE_MS });
+        }
         await cima.waitFor({ state: 'hidden', timeout: 10_000 });
         cerrado = true;
         console.log(`      ${aviso.nota}`);
@@ -322,9 +339,47 @@ export async function cerrarAvisosDfe(
   return cerrado;
 }
 
+/** Tope por intento de cada accion del DFE. */
+const ACCION_DFE_MS = 5_000;
+
+/**
+ * Corre una accion del DFE esquivando los avisos, y la nombra si no se puede.
+ *
+ * Cerrar los avisos una vez antes no alcanza: ARCA los abre por AJAX en
+ * cualquier momento, incluso despues de que la tabla ya cargo. Si aparecen
+ * entre el cierre y el click, su backdrop intercepta el puntero y Playwright
+ * espera a que el elemento sea accionable hasta agotar el timeout del contexto
+ * —30 s—, sin decir donde fue. Por eso cada intento va acotado, entre intentos
+ * se cierra lo que haya aparecido, y al agotarse el error nombra el paso en
+ * lugar del generico "el portal tardo demasiado".
+ */
+async function accionDfe<T>(
+  vista: Page,
+  paso: string,
+  accion: () => Promise<T>,
+  intentos = 3,
+): Promise<T> {
+  let ultimo: unknown = null;
+  for (let intento = 1; intento <= intentos; intento += 1) {
+    await cerrarAvisosDfe(vista, intento === 1 ? 0 : 1_000);
+    try {
+      return await accion();
+    } catch (error) {
+      ultimo = error;
+      console.log(`      ${paso}: interceptado, reintentando (${intento}/${intentos})`);
+    }
+  }
+  const detalle = ultimo instanceof Error ? ultimo.message.split('\n')[0] : 'sin detalle';
+  throw new ArcaError(
+    'TIMEOUT',
+    `El Domicilio Fiscal no dejo completar "${paso}" en ${intentos} intentos: ${detalle}`,
+  );
+}
+
 async function seleccionarBandejaPropia(vista: Page): Promise<typeof TAB_PROPIAS> {
-  await cerrarAvisosDfe(vista);
-  await vista.locator('#mis-comunicaciones-tab___BV_tab_button__').click();
+  await accionDfe(vista, 'tab mis comunicaciones', () =>
+    vista.locator('#mis-comunicaciones-tab___BV_tab_button__').click({ timeout: ACCION_DFE_MS }),
+  );
   await cerrarAvisosDfe(vista, 500);
   return TAB_PROPIAS;
 }
@@ -334,8 +389,11 @@ async function seleccionarRepresentado(
   cuit: string,
   cuitFormateado: string,
 ): Promise<typeof TAB_REPRESENTADOS> {
-  await cerrarAvisosDfe(vista);
-  await vista.locator('#representados-comunicaciones-tab___BV_tab_button__').click();
+  await accionDfe(vista, 'tab representados', () =>
+    vista
+      .locator('#representados-comunicaciones-tab___BV_tab_button__')
+      .click({ timeout: ACCION_DFE_MS }),
+  );
   await cerrarAvisosDfe(vista, 500);
   const selector = vista.locator('#select-representados');
   await selector.waitFor({ state: 'attached', timeout: 15_000 });
@@ -349,12 +407,16 @@ async function seleccionarRepresentado(
   const control = selector.locator(
     'xpath=following-sibling::*[contains(concat(" ", normalize-space(@class), " "), " input-group ")]',
   );
-  await control.click();
+  await accionDfe(vista, 'desplegar representados', () =>
+    control.click({ timeout: ACCION_DFE_MS }),
+  );
   const opcion = vista.locator(`button.dropdown-item[id="${cuit}"]`);
   if ((await opcion.count()) !== 1) {
     throw new ArcaError('SELECTOR_NO_ENCONTRADO', `No se pudo elegir el CUIT ${cuitFormateado}`);
   }
-  await opcion.click();
+  await accionDfe(vista, `elegir representado ${cuitFormateado}`, () =>
+    opcion.click({ timeout: ACCION_DFE_MS }),
+  );
   await esperarTablaLista(vista, TAB_REPRESENTADOS);
   return TAB_REPRESENTADOS;
 }
