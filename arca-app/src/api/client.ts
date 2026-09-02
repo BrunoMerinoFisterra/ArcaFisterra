@@ -342,6 +342,23 @@ export function actualizarUsuario(
   });
 }
 
+/**
+ * Otorga o quita permisos de administrador.
+ *
+ * Va aparte de `actualizarUsuario` porque la API mantiene el 409 sobre las
+ * cuentas admin en `PATCH /usuarios/:id`: el rol es lo único que se les cambia.
+ * Al bajar a `user` el cupo es obligatorio — sin límite es sólo para admins.
+ */
+export function cambiarRolUsuario(
+  usuarioId: string,
+  cambio: { rol: 'admin' } | { rol: 'user'; limiteClientes: number },
+): Promise<UsuarioGestion> {
+  return pedir<UsuarioGestion>(`/usuarios/${encodeURIComponent(usuarioId)}/rol`, {
+    method: 'PATCH',
+    body: JSON.stringify(cambio),
+  });
+}
+
 /** Comparte una empresa ya cargada con otra cuenta, sin volver a darla de alta. */
 export function asignarClienteAUsuario(
   usuarioId: string,

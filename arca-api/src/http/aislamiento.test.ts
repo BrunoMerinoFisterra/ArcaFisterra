@@ -1157,6 +1157,119 @@ for (const [motor, crearRepo] of MOTORES) {
         await s.cerrar();
       }
     });
+
+    test('una cuenta comun no puede repartir permisos de admin', async () => {
+      const s = await levantar(crearRepo);
+      try {
+        const ayudante = await s.login('ayudante@fisterra.com');
+        // Si esto se afloja, cualquier cuenta se asciende sola y el cupo, el
+        // aislamiento por usuario y el 404 de `clienteVisible` dejan de valer.
+        assert.equal(
+          (await s.enviar('/usuarios/u2/rol', 'PATCH', ayudante, { rol: 'admin' })).status,
+          403,
+        );
+        assert.equal((await s.repo.listarUsuarios()).find((u) => u.id === 'u2')?.rol, 'user');
+      } finally {
+        await s.cerrar();
+      }
+    });
+
+    test('promover deja la cuenta sin tope de clientes', async () => {
+      const s = await levantar(crearRepo);
+      try {
+        const admin = await s.login('bruno@fisterra.com');
+        const r = await s.enviar('/usuarios/u2/rol', 'PATCH', admin, { rol: 'admin' });
+        assert.equal(r.status, 200);
+
+        const cuerpo = (await r.json()) as { rol: string; limiteClientes: number | null };
+        assert.equal(cuerpo.rol, 'admin');
+        // `null` es lo que el tipo reserva para admins. Si quedara un numero,
+        // el middleware de cupo le seguiria bloqueando el acceso fiscal.
+        assert.equal(cuerpo.limiteClientes, null);
+      } finally {
+        await s.cerrar();
+      }
+    });
+
+    test('bajar a usuario exige un cupo en el mismo pedido', async () => {
+      const s = await levantar(crearRepo);
+      try {
+        const admin = await s.login('bruno@fisterra.com');
+        await s.enviar('/usuarios/u2/rol', 'PATCH', admin, { rol: 'admin' });
+
+        // Sin `limiteClientes` no hay default: quedaria en null, que es acceso
+        // fiscal sin tope para una cuenta que ya no es administradora.
+        assert.equal(
+          (await s.enviar('/usuarios/u2/rol', 'PATCH', admin, { rol: 'user' })).status,
+          400,
+        );
+        const r = await s.enviar('/usuarios/u2/rol', 'PATCH', admin, {
+          rol: 'user',
+          limiteClientes: 3,
+        });
+        assert.equal(r.status, 200);
+        assert.equal(((await r.json()) as { limiteClientes: number }).limiteClientes, 3);
+      } finally {
+        await s.cerrar();
+      }
+    });
+
+    test('nadie se cambia el rol a si mismo', async () => {
+      const s = await levantar(crearRepo);
+      try {
+        const admin = await s.login('bruno@fisterra.com');
+        // Quien se degrada pierde en el mismo movimiento el permiso para
+        // revertirlo, y es el error facil de cometer estando en la propia fila.
+        assert.equal(
+          (
+            await s.enviar('/usuarios/u1/rol', 'PATCH', admin, {
+              rol: 'user',
+              limiteClientes: 5,
+            })
+          ).status,
+          409,
+        );
+        assert.equal((await s.repo.listarUsuarios()).find((u) => u.id === 'u1')?.rol, 'admin');
+      } finally {
+        await s.cerrar();
+      }
+    });
+
+    test('el ultimo admin no se puede degradar', async () => {
+      const s = await levantar(crearRepo);
+      try {
+        // Contra el repositorio y no por HTTP a proposito: la ruta ya frena la
+        // autodegradacion, asi que este guard existe para la carrera de dos
+        // admins degradandose mutuamente a la vez. Sin el, el sistema queda sin
+        // ninguno y de ahi no se vuelve: `crearAdminInicial` se niega a correr
+        // con la tabla poblada.
+        assert.deepEqual(await s.repo.cambiarRolUsuario('u1', { rol: 'user', limiteClientes: 5 }), {
+          ok: false,
+          motivo: 'ULTIMO_ADMIN',
+        });
+        assert.equal((await s.repo.listarUsuarios()).find((u) => u.id === 'u1')?.rol, 'admin');
+
+        // Con dos, degradar a uno si corresponde.
+        await s.repo.cambiarRolUsuario('u2', { rol: 'admin' });
+        const bajada = await s.repo.cambiarRolUsuario('u1', { rol: 'user', limiteClientes: 5 });
+        assert.equal(bajada.ok, true);
+      } finally {
+        await s.cerrar();
+      }
+    });
+
+    test('cambiar el rol de una cuenta inexistente da 404', async () => {
+      const s = await levantar(crearRepo);
+      try {
+        const admin = await s.login('bruno@fisterra.com');
+        assert.equal(
+          (await s.enviar('/usuarios/no-existe/rol', 'PATCH', admin, { rol: 'admin' })).status,
+          404,
+        );
+      } finally {
+        await s.cerrar();
+      }
+    });
   });
 }
 

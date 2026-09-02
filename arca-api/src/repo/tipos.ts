@@ -88,6 +88,21 @@ export interface SolicitudParaVerificar {
  * llamar sin filtrar. El aislamiento multi-tenant es parte del contrato, no
  * algo que cada endpoint tiene que acordarse de aplicar.
  */
+/**
+ * Cambio de rol pedido. Bajar a `user` exige cupo en el mismo movimiento: no
+ * hay estado intermedio donde una cuenta común quede sin tope de clientes.
+ */
+export type CambioDeRol = { rol: 'admin' } | { rol: 'user'; limiteClientes: number };
+
+/**
+ * Por qué no se pudo, cuando no se pudo. Es un resultado y no una excepción
+ * porque `ULTIMO_ADMIN` no es una falla del sistema: es la respuesta correcta a
+ * un pedido válido, y la ruta la traduce a un 409.
+ */
+export type ResultadoCambioRol =
+  | { ok: true; usuario: UsuarioGestion }
+  | { ok: false; motivo: 'NO_EXISTE' | 'ULTIMO_ADMIN' };
+
 export interface Repositorio {
   /* --- Usuarios --- */
   buscarUsuarioPorEmail(email: string): Promise<UsuarioConHash | null>;
@@ -104,8 +119,10 @@ export interface Repositorio {
   /**
    * Crea la PRIMERA cuenta administradora, y sólo si no existe ningún usuario.
    *
-   * Hace falta porque `crearUsuario` fuerza el rol `user`: por HTTP no hay
-   * —ni debe haber— forma de fabricar un admin. Sin este método una instalación
+   * Hace falta porque `crearUsuario` fuerza el rol `user`: un alta por HTTP
+   * nunca nace administradora. Promover una cuenta existente sí se puede, pero
+   * eso ya exige estar logueado como admin (`cambiarRolUsuario`), y acá el
+   * problema es el arranque. Sin este método una instalación
    * con SEMBRAR_DEMO=0 arranca con la tabla vacía y no puede entrar nadie
    * nunca, porque para crear el primer usuario hay que estar logueado como
    * admin.
@@ -129,6 +146,21 @@ export interface Repositorio {
       activo?: boolean;
     },
   ): Promise<UsuarioGestion | null>;
+
+  /**
+   * Promueve una cuenta a administradora o la baja a usuaria.
+   *
+   * El conteo de admins y la escritura van en la MISMA transacción. Mirarlo
+   * antes dejaría una ventana donde dos degradaciones simultáneas se aprueban
+   * contra el mismo estado y el sistema queda sin ningún admin — y de ahí no se
+   * vuelve, porque `crearAdminInicial` se niega a correr con la tabla poblada
+   * justamente para no ser una puerta trasera.
+   *
+   * Al promover, el cupo pasa a `null`: es lo que `Usuario` reserva para
+   * administradores. Al bajar hace falta un número, porque una cuenta común con
+   * cupo nulo tendría acceso fiscal sin tope.
+   */
+  cambiarRolUsuario(usuarioId: string, cambio: CambioDeRol): Promise<ResultadoCambioRol>;
   cantidadClientesDe(usuarioId: string): Promise<number>;
 
   /* --- Clientes (siempre filtrados por usuario) --- */

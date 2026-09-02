@@ -2,14 +2,17 @@ import { Fragment, useEffect, useMemo, useState, type FormEvent } from 'react';
 import {
   actualizarUsuario,
   asignarClienteAUsuario,
+  cambiarRolUsuario,
   crearUsuario,
   listarUsuarios,
   quitarClienteDeUsuario,
 } from '../api/client';
+import { useAuth } from '../auth/AuthContext';
 import { Badge } from '../components/Badge';
 import type { UsuarioGestion } from '../types';
 
 export default function Usuarios() {
+  const { usuario: sesion } = useAuth();
   const [usuarios, setUsuarios] = useState<UsuarioGestion[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [mensaje, setMensaje] = useState<string | null>(null);
@@ -120,6 +123,15 @@ export default function Usuarios() {
                         <PanelUsuario
                           usuario={usuario}
                           catalogo={catalogo}
+                          esUnoMismo={usuario.id === sesion?.id}
+                          alCambiarRol={(cambio) =>
+                            ejecutar(
+                              () => cambiarRolUsuario(usuario.id, cambio),
+                              cambio.rol === 'admin'
+                                ? `${usuario.nombre} ahora es administrador.`
+                                : `${usuario.nombre} ya no es administrador.`,
+                            )
+                          }
                           alGuardar={(cambios) =>
                             ejecutar(
                               () => actualizarUsuario(usuario.id, cambios),
@@ -231,12 +243,16 @@ function AltaUsuario({
 function PanelUsuario({
   usuario,
   catalogo,
+  esUnoMismo,
+  alCambiarRol,
   alGuardar,
   alAsignarCliente,
   alQuitarCliente,
 }: {
   usuario: UsuarioGestion;
   catalogo: UsuarioGestion['clientes'];
+  esUnoMismo: boolean;
+  alCambiarRol: (cambio: { rol: 'admin' } | { rol: 'user'; limiteClientes: number }) => void;
   alGuardar: (cambios: {
     nombre?: string;
     password?: string;
@@ -251,6 +267,10 @@ function PanelUsuario({
   const [password, setPassword] = useState('');
   const [clienteAConfirmar, setClienteAConfirmar] = useState<string | null>(null);
   const [aAsignar, setAAsignar] = useState('');
+  const [confirmandoRol, setConfirmandoRol] = useState(false);
+  // Cupo con el que quedaría si se le quita el permiso. Un admin tiene
+  // `limiteClientes: null`, así que no hay número previo del que partir.
+  const [limiteAlBajar, setLimiteAlBajar] = useState(usuario.limiteClientes ?? 5);
 
   const disponibles = catalogo.filter(
     (cliente) => !usuario.clientes.some((asignado) => asignado.id === cliente.id),
@@ -267,10 +287,72 @@ function PanelUsuario({
     <div className="gestion gestion--usuario">
       {esAdmin && (
         <p className="aviso">
-          De una cuenta administradora sólo se gestionan las empresas asignadas. Sus datos, su
-          contraseña y su estado se cambian desde la propia cuenta.
+          De una cuenta administradora sólo se gestionan las empresas asignadas y el permiso. Sus
+          datos, su contraseña y su estado se cambian desde la propia cuenta.
         </p>
       )}
+
+      <div className="gestion__bloque">
+        <h3>Permisos</h3>
+        <p className="tenue">
+          {esAdmin
+            ? 'Administrador: ve y gestiona todas las empresas, las cuentas y los permisos, sin tope de clientes.'
+            : 'Usuario: sólo ve las empresas que tenga asignadas, hasta su límite de clientes.'}
+        </p>
+
+        {esUnoMismo ? (
+          // Tu propio rol lo cambia otro admin. Si pudieras bajarte solo,
+          // perderías en el mismo click el permiso para revertirlo — y la API
+          // lo rechaza igual con 409, así que el botón nunca funcionaría.
+          <p className="tenue">Es tu cuenta: tu rol lo cambia otro administrador.</p>
+        ) : confirmandoRol ? (
+          <div className="acciones acciones--compactas">
+            <button
+              type="button"
+              className={esAdmin ? 'btn btn--peligro' : 'btn btn--primario'}
+              onClick={() => {
+                alCambiarRol(esAdmin ? { rol: 'user', limiteClientes: limiteAlBajar } : { rol: 'admin' });
+                setConfirmandoRol(false);
+              }}
+            >
+              {esAdmin
+                ? `Confirmar: quitarle administrador y dejarle ${limiteAlBajar} cliente(s)`
+                : 'Confirmar: darle administrador'}
+            </button>
+            <button type="button" className="btn" onClick={() => setConfirmandoRol(false)}>
+              Cancelar
+            </button>
+          </div>
+        ) : (
+          <div className="fila-campos">
+            {esAdmin && (
+              <label className="campo usuarios__limite">
+                <span className="campo__etiqueta">Límite al bajarla</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={10_000}
+                  value={limiteAlBajar}
+                  onChange={(e) => setLimiteAlBajar(Number(e.target.value))}
+                />
+              </label>
+            )}
+            <button
+              type="button"
+              className={esAdmin ? 'btn btn--peligro' : 'btn'}
+              onClick={() => setConfirmandoRol(true)}
+            >
+              {esAdmin ? 'Quitar administrador' : 'Hacer administrador'}
+            </button>
+          </div>
+        )}
+
+        {!esAdmin && (
+          <p className="tenue">
+            Al darle el permiso pasa a no tener tope de clientes y podrá ver la cartera completa.
+          </p>
+        )}
+      </div>
 
       {!esAdmin && (
       <div className="gestion__bloque">

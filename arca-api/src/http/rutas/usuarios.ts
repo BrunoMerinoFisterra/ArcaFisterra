@@ -3,8 +3,8 @@ import { z } from 'zod';
 import type { Config } from '../../config.js';
 import { hashearPassword } from '../../crypto/password.js';
 import type { UsuarioGestion } from '../../dominio/tipos.js';
-import type { Repositorio } from '../../repo/tipos.js';
-import { requiereAdmin, requiereAuth } from '../auth.js';
+import type { CambioDeRol, Repositorio } from '../../repo/tipos.js';
+import { requiereAdmin, requiereAuth, usuarioDe } from '../auth.js';
 import { ErrorHttp } from '../errores.js';
 
 const esquemaAlta = z.object({
@@ -22,6 +22,19 @@ const esquemaCambios = z
     activo: z.boolean().optional(),
   })
   .refine((cambios) => Object.keys(cambios).length > 0);
+
+/**
+ * Bajar a `user` pide el cupo en el mismo request. Es obligatorio y no tiene
+ * default: un default silencioso terminaría dándole a la cuenta un tope que
+ * nadie eligió, y del lado alto de ese error hay acceso fiscal de más.
+ */
+const esquemaRol = z.discriminatedUnion('rol', [
+  z.object({ rol: z.literal('admin') }),
+  z.object({
+    rol: z.literal('user'),
+    limiteClientes: z.number().int().min(0).max(10_000),
+  }),
+]);
 
 export function rutasUsuarios(repo: Repositorio, config: Config): Router {
   const router = Router();
@@ -87,6 +100,48 @@ export function rutasUsuarios(repo: Repositorio, config: Config): Router {
     const actualizado = await repo.actualizarUsuario(id, cambios);
     if (!actualizado) throw new ErrorHttp(404, 'No existe ese usuario.');
     res.json(await conClientes(actualizado));
+  });
+
+  /**
+   * Otorga o quita permisos de administrador.
+   *
+   * Va por su propia ruta y no por `PATCH /usuarios/:id` porque ese sigue
+   * rechazando con 409 todo cambio sobre una cuenta admin. Separarlo deja el
+   * unico camino que fabrica administradores en un solo lugar, explicito.
+   *
+   * Dos barreras que no dependen del repositorio:
+   *  - Nadie se degrada a si mismo. Es el error facil de cometer, y quien lo
+   *    comete pierde en el mismo movimiento el permiso para revertirlo.
+   *  - Bajar a `user` exige cupo, porque `null` significa sin limite y eso solo
+   *    corresponde a un admin.
+   *
+   * La de verdad —que no quede el sistema sin ningun admin— la hace el
+   * repositorio dentro de la transaccion; aca no se puede chequear sin abrir
+   * una carrera.
+   */
+  router.patch('/:id/rol', async (req, res) => {
+    const id = req.params['id'];
+    const parseo = esquemaRol.safeParse(req.body);
+    if (typeof id !== 'string' || !parseo.success) {
+      throw new ErrorHttp(400, 'Indicá el rol, y el límite de clientes si la bajás a usuario.');
+    }
+    if (id === usuarioDe(req).id) {
+      throw new ErrorHttp(409, 'No podés cambiar tu propio rol.');
+    }
+
+    const cambio: CambioDeRol =
+      parseo.data.rol === 'admin'
+        ? { rol: 'admin' }
+        : { rol: 'user', limiteClientes: parseo.data.limiteClientes };
+    const resultado = await repo.cambiarRolUsuario(id, cambio);
+    if (!resultado.ok) {
+      if (resultado.motivo === 'NO_EXISTE') throw new ErrorHttp(404, 'No existe ese usuario.');
+      throw new ErrorHttp(
+        409,
+        'Es la única cuenta administradora: promové a otra antes de quitarle el permiso.',
+      );
+    }
+    res.json(await conClientes(resultado.usuario));
   });
 
   /**

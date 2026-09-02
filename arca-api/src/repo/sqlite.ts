@@ -326,6 +326,61 @@ export function crearRepositorioSqlite(opciones: OpcionesSqlite): Repositorio & 
         : null;
     },
 
+    async cambiarRolUsuario(usuarioId, cambio) {
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        const actual = uno<FilaUsuario>('SELECT * FROM arca_users WHERE id = ?', usuarioId);
+        if (!actual) {
+          db.exec('ROLLBACK');
+          return { ok: false, motivo: 'NO_EXISTE' };
+        }
+
+        // El COUNT va dentro de la transacción a propósito: ver arriba, en el
+        // contrato. Es la unica barrera contra quedarse sin ningun admin.
+        if (cambio.rol === 'user' && actual.rol === 'admin') {
+          const admins =
+            uno<{ n: number }>(`SELECT COUNT(*) AS n FROM arca_users WHERE rol = 'admin'`)?.n ?? 0;
+          if (admins <= 1) {
+            db.exec('ROLLBACK');
+            return { ok: false, motivo: 'ULTIMO_ADMIN' };
+          }
+        }
+
+        correr(
+          'UPDATE arca_users SET rol = ?, limite_clientes = ? WHERE id = ?',
+          cambio.rol,
+          cambio.rol === 'admin' ? null : cambio.limiteClientes,
+          usuarioId,
+        );
+        const [gestion] = todos<FilaUsuario & { clientes_asignados: number }>(
+          `SELECT u.*, COUNT(uc.cliente_id) AS clientes_asignados
+             FROM arca_users u
+             LEFT JOIN arca_user_clientes uc ON uc.usuario_id = u.id
+            WHERE u.id = ?
+            GROUP BY u.id`,
+          usuarioId,
+        );
+        db.exec('COMMIT');
+        return gestion
+          ? {
+              ok: true,
+              usuario: {
+                id: gestion.id,
+                email: gestion.email,
+                nombre: gestion.nombre,
+                rol: gestion.rol as Rol,
+                activo: gestion.activo === 1,
+                limiteClientes: gestion.limite_clientes,
+                clientesAsignados: gestion.clientes_asignados,
+              },
+            }
+          : { ok: false, motivo: 'NO_EXISTE' };
+      } catch (error) {
+        db.exec('ROLLBACK');
+        throw error;
+      }
+    },
+
     async cantidadClientesDe(usuarioId) {
       return uno<{ n: number }>(
         'SELECT COUNT(*) AS n FROM arca_user_clientes WHERE usuario_id = ?',

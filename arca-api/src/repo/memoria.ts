@@ -365,6 +365,31 @@ export async function crearRepositorioMemoria(): Promise<Repositorio> {
         clientesAsignados: asignaciones.get(usuario.id)?.size ?? 0,
       };
     },
+    async cambiarRolUsuario(usuarioId, cambio) {
+      const usuario = usuarios.find((candidato) => candidato.id === usuarioId);
+      if (!usuario) return { ok: false, motivo: 'NO_EXISTE' };
+
+      if (cambio.rol === 'user' && usuario.rol === 'admin') {
+        const admins = usuarios.filter((candidato) => candidato.rol === 'admin').length;
+        if (admins <= 1) return { ok: false, motivo: 'ULTIMO_ADMIN' };
+      }
+
+      usuario.rol = cambio.rol;
+      usuario.limiteClientes = cambio.rol === 'admin' ? null : cambio.limiteClientes;
+      return {
+        ok: true,
+        usuario: {
+          id: usuario.id,
+          email: usuario.email,
+          nombre: usuario.nombre,
+          rol: usuario.rol,
+          activo: usuario.activo,
+          limiteClientes: usuario.limiteClientes,
+          clientesAsignados: asignaciones.get(usuario.id)?.size ?? 0,
+        },
+      };
+    },
+
     async cantidadClientesDe(usuarioId) {
       return asignaciones.get(usuarioId)?.size ?? 0;
     },
