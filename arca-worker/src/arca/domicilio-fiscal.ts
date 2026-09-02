@@ -59,12 +59,18 @@ export interface ResultadoDetallesDfe {
  * informó sin leer. Así se conserva el estado observado antes de que el GET de
  * detalle abra la comunicación en ARCA.
  */
+export interface ResultadoDfe {
+  notificaciones: NotificacionNueva[];
+  /** CUITs que el DFE ofrecio, para que el panel los liste. */
+  contribuyentes: string[];
+}
+
 export async function extraerNotificacionesDfe(
   page: Page,
   cuitCliente: string,
   cuitUsuario: string,
   opciones: OpcionesDetallesDfe = {},
-): Promise<NotificacionNueva[]> {
+): Promise<ResultadoDfe> {
   await page.goto(URLS.portal, { waitUntil: 'domcontentloaded' });
   const buscador = await primerSelectorVisible(page, PORTAL.inputBuscar);
   await page.fill(buscador.selector, SERVICIO);
@@ -144,7 +150,7 @@ export async function extraerNotificacionesDfe(
       b.fecha.localeCompare(a.fecha),
     );
     await cargarDetallesDfe(vista, objetivo, notificaciones, opciones);
-    return notificaciones;
+    return { notificaciones, contribuyentes: [...porNombre.values()] };
   } catch (error) {
     const base = await volcarEstado(vista, 'domicilio-fiscal');
     console.error(`      estado volcado en ${base}.{png,html,url.txt}`);
@@ -438,8 +444,10 @@ async function mapaRepresentados(vista: Page): Promise<Map<string, string>> {
       })),
     );
   for (const opcion of opciones) {
-    const cuit = soloDigitos(opcion.value);
-    // Saltea "-1" (todos) y el placeholder vacio.
+    // Extraccion cruda y no `soloDigitos`, que LANZA si no hay 11 digitos: el
+    // combo trae ademas el placeholder vacio y el "-1" de "todos", y los dos
+    // son opciones legitimas que hay que saltear, no errores.
+    const cuit = opcion.value.replace(/\D/g, '');
     if (cuit.length !== 11) continue;
     const nombre = normalizarRazonSocial(opcion.texto);
     if (nombre) mapa.set(nombre, cuit);

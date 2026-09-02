@@ -455,7 +455,7 @@ async function procesarModulo(
         .filter((notificacion) => notificacion.cuerpo !== null)
         .map((notificacion) => notificacion.idComunicacion),
     );
-    const notificaciones = await extraerNotificacionesDfe(
+    const { notificaciones, contribuyentes } = await extraerNotificacionesDfe(
       sesion.page,
       cliente.cuit,
       acceso.usuarioCuit,
@@ -464,6 +464,7 @@ async function procesarModulo(
         abrirNoLeidasAutorizadas: cfg.dfeAbrirNoLeidas,
       },
     );
+    await repo.registrarRepresentados(cliente.id, 'Domicilio Fiscal', contribuyentes);
     const guardadas = await repo.guardarNotificaciones(cliente.id, notificaciones);
     const sinLeer = notificaciones.filter((notificacion) => !notificacion.leida).length;
     console.log(
