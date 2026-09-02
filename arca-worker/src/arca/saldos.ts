@@ -153,21 +153,45 @@ async function leerMarcoCuentas(
     // ARCA oculta el tab "Vencimientos" para algunos contribuyentes y deja la
     // tabla como contenido inicial. La tabla visible existe en ambas variantes.
     const tablaVencimientos = tablaVencimientosVisible;
-    await tablaVencimientos.waitFor({ state: 'visible', timeout: ESPERA_TABLA_MS });
     const panelVencimientos = marco.locator(CUENTAS_TRIBUTARIAS.panelActivo);
-    const contenedorVencimientos =
-      (await panelVencimientos.count()) === 1 ? panelVencimientos : marco.locator('body');
-    await mostrarTodasLasFilas(contenedorVencimientos, vista);
-    const filasVencimientos = await tablaVencimientos
-      .locator('tbody tr:not(.b-table-empty-row)')
-      .evaluateAll((elementos) =>
-        elementos.map((fila) =>
-          Array.from(fila.querySelectorAll('td')).map((celda) => celda.textContent ?? ''),
-        ),
-      );
-    vencimientos = filasVencimientos
-      .map((celdas) => vencimientoDesdeCeldas(celdas))
-      .filter((vencimiento): vencimiento is VencimientoExtraido => vencimiento !== null);
+
+    let hayTabla = true;
+    try {
+      await tablaVencimientos.waitFor({ state: 'visible', timeout: ESPERA_TABLA_MS });
+    } catch {
+      // Con cero vencimientos ARCA a veces no dibuja NINGUNA tabla: la pestaña
+      // queda habilitada y activa, y el panel simplemente vacio. Esperar la
+      // tabla ahi no termina nunca.
+      //
+      // Que no haya tabla no se puede tomar como "cero" a la ligera: si la
+      // hubiera y solo estuviera tardando, devolver vacio borraria vencimientos
+      // reales del tablero. Por eso se distingue: sin ninguna tabla en el panel
+      // activo, no hay nada que leer y seguimos con Deudas y DDJJ; con una
+      // tabla que existe pero no aparece, el problema es otro y hay que verlo.
+      const tablasEnPanel =
+        (await panelVencimientos.count()) === 1
+          ? await panelVencimientos.locator('table').count()
+          : await marco.locator('table').count();
+      if (tablasEnPanel > 0) throw new ArcaError('TIMEOUT', 'la tabla de Vencimientos no aparecio');
+      hayTabla = false;
+      console.log('        sin vencimientos (la pestaña no publica tabla)');
+    }
+
+    if (hayTabla) {
+      const contenedorVencimientos =
+        (await panelVencimientos.count()) === 1 ? panelVencimientos : marco.locator('body');
+      await mostrarTodasLasFilas(contenedorVencimientos, vista);
+      const filasVencimientos = await tablaVencimientos
+        .locator('tbody tr:not(.b-table-empty-row)')
+        .evaluateAll((elementos) =>
+          elementos.map((fila) =>
+            Array.from(fila.querySelectorAll('td')).map((celda) => celda.textContent ?? ''),
+          ),
+        );
+      vencimientos = filasVencimientos
+        .map((celdas) => vencimientoDesdeCeldas(celdas))
+        .filter((vencimiento): vencimiento is VencimientoExtraido => vencimiento !== null);
+    }
   } else {
     console.log('        sin vencimientos (ARCA deshabilito la pestaña)');
   }
