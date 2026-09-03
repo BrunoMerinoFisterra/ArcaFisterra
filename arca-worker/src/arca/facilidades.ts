@@ -141,7 +141,7 @@ async function leerPlanesDeUnCuit(vista: Page, cuitCliente: string): Promise<Pla
             cuotas,
             totalPagado,
           },
-          soloDigitos(cuitCliente),
+          formatearCuit(soloDigitos(cuitCliente)),
         ),
       );
 

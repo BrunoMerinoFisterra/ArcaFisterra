@@ -450,7 +450,9 @@ async function mapaRepresentados(vista: Page): Promise<Map<string, string>> {
     const cuit = opcion.value.replace(/\D/g, '');
     if (cuit.length !== 11) continue;
     const nombre = normalizarRazonSocial(opcion.texto);
-    if (nombre) mapa.set(nombre, cuit);
+    // Formato canonico: el repositorio lo normaliza igual, pero mandar ya el
+    // formato bueno evita que la diferencia viaje por medio sistema.
+    if (nombre) mapa.set(nombre, `${cuit.slice(0, 2)}-${cuit.slice(2, 10)}-${cuit.slice(10)}`);
   }
   return mapa;
 }

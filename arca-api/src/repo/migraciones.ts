@@ -25,6 +25,7 @@ export function prepararEsquemaSqlite(db: DatabaseSync, esquema: string): void {
   asegurarColumnasJobs(db);
   asegurarUnSoloJobActivo(db);
   asegurarJobPorEmpresa(db);
+  unificarFormatoContribuyente(db);
   limpiarDetalleAutorizacionAnterior(db);
 
   db.exec(`
@@ -678,6 +679,71 @@ function asegurarUnSoloJobActivo(db: DatabaseSync): void {
  * corran de a una la garantiza `arca_sync_locks`, que serializa por cuenta
  * ARCA — esa es la proteccion real contra dos logins simultaneos, no el indice.
  */
+/**
+ * Deja todos los CUIT de contribuyente con guiones, que es como ya guardaban
+ * las cuatro tablas viejas.
+ *
+ * La primera version del panel por empresa escribio `30712011196` en
+ * `arca_representados` y `arca_planes`, y en las notificaciones nuevas del DFE,
+ * mientras comprobantes, saldos, vencimientos y DDJJ seguian con
+ * `30-71201119-6`. El filtro por empresa comparaba strings distintos: la
+ * empresa aparecia en el panel y al entrar se veia vacia. Peor, planes y
+ * notificaciones quedaron con los dos formatos conviviendo, donde cualquier
+ * filtro devuelve una parte.
+ *
+ * Es idempotente: las filas que ya tienen guiones no matchean el WHERE.
+ */
+function unificarFormatoContribuyente(db: DatabaseSync): void {
+  const conGuiones = `substr(REPLACE(%COL%, '-', ''), 1, 2) || '-' ||
+                      substr(REPLACE(%COL%, '-', ''), 3, 8) || '-' ||
+                      substr(REPLACE(%COL%, '-', ''), 11, 1)`;
+
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    // Una misma comunicacion pudo entrar DOS veces: la del backfill con
+    // guiones y la de la corrida nueva del DFE sin ellos. Normalizar sin
+    // deduplicar violaria el UNIQUE.
+    //
+    // Se conserva la de guiones —la original— porque es la que tiene el estado
+    // de lectura local (`vista_app_en`, `leido_app_en`) y el cuerpo ya
+    // descargado. La duplicada es de esta misma jornada y la proxima
+    // sincronizacion vuelve a traer lo de ARCA sobre la que queda.
+    db.exec(`
+      DELETE FROM arca_notificaciones
+       WHERE contribuyente_cuit NOT LIKE '%-%'
+         AND EXISTS (
+           SELECT 1 FROM arca_notificaciones otra
+            WHERE otra.cliente_id = arca_notificaciones.cliente_id
+              AND otra.id_comunicacion = arca_notificaciones.id_comunicacion
+              AND otra.contribuyente_cuit LIKE '%-%'
+              AND REPLACE(otra.contribuyente_cuit, '-', '')
+                  = REPLACE(arca_notificaciones.contribuyente_cuit, '-', '')
+         );
+    `);
+
+    for (const [tabla, columna] of [
+      ['arca_representados', 'cuit'],
+      ['arca_planes', 'contribuyente_cuit'],
+      ['arca_notificaciones', 'contribuyente_cuit'],
+      ['arca_comprobantes', 'contribuyente_cuit'],
+      ['arca_saldos', 'contribuyente_cuit'],
+      ['arca_vencimientos', 'contribuyente_cuit'],
+      ['arca_ddjj_pendientes', 'contribuyente_cuit'],
+    ] as const) {
+      db.exec(
+        `UPDATE ${tabla}
+            SET ${columna} = ${conGuiones.replaceAll('%COL%', columna)}
+          WHERE ${columna} NOT LIKE '%-%'
+            AND length(REPLACE(${columna}, '-', '')) = 11`,
+      );
+    }
+    db.exec('COMMIT');
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
+}
+
 function asegurarJobPorEmpresa(db: DatabaseSync): void {
   const columnas = db.prepare('PRAGMA table_info(arca_sync_jobs)').all() as Array<{ name: string }>;
   if (columnas.some((columna) => columna.name === 'contribuyente_cuit')) return;

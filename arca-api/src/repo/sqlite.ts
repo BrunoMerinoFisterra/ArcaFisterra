@@ -24,6 +24,7 @@ import type {
   Vencimiento,
 } from '../dominio/tipos.js';
 import { estadoNotificacion } from '../dominio/notificaciones.js';
+import { formatearCuit } from '../dominio/cuit.js';
 import type { Repositorio } from './tipos.js';
 import { prepararEsquemaSqlite } from './migraciones.js';
 
@@ -124,6 +125,21 @@ export function crearRepositorioSqlite(opciones: OpcionesSqlite): Repositorio & 
     WHERE uc.usuario_id = ?`;
 
   /**
+   * Forma canonica del CUIT de un contribuyente EN LA BASE: con guiones.
+   *
+   * No es cosmetica. Las cuatro tablas viejas ya guardaban asi, y escribir
+   * `30712011196` en unas y `30-71201119-6` en otras hace que el filtro por
+   * empresa no matchee nada: el panel lista la empresa y al entrar aparece
+   * vacia. Peor todavia, deja tablas con los dos formatos mezclados, donde
+   * cualquier filtro devuelve una parte.
+   *
+   * El repositorio es la capa que tiene que garantizarlo — es su contrato de
+   * persistencia, y depender de que cada llamador formatee igual es depender
+   * de que nadie se olvide.
+   */
+  const canonico = (cuit: string): string => formatearCuit(cuit);
+
+  /**
    * Acota una lectura a UNA de las empresas de la cuenta.
    *
    * Sin CUIT devuelve lo de la cuenta entera, que es lo que veia el detalle
@@ -131,7 +147,7 @@ export function crearRepositorioSqlite(opciones: OpcionesSqlite): Repositorio & 
    */
   const filtroEmpresa = (cuit?: string) => (cuit ? ' AND contribuyente_cuit = ?' : '');
   const argsEmpresa = (clienteId: string, cuit?: string) =>
-    cuit ? [clienteId, cuit] : [clienteId];
+    cuit ? [clienteId, canonico(cuit)] : [clienteId];
 
   /**
    * Las filas del panel: una por (cuenta, empresa).
@@ -164,7 +180,9 @@ export function crearRepositorioSqlite(opciones: OpcionesSqlite): Repositorio & 
       cuit: f.cuit,
       nombre: f.nombre ?? f.cuit,
       representante: { cuit: f.cliente_cuit, razonSocial: f.cliente_razon },
-      esTitular: f.cuit === f.cliente_cuit.replace(/\D/g, ''),
+      // Comparado en digitos: los dos vienen de la base pero de tablas que
+      // podrian formatear distinto, y esto no debe depender de eso.
+      esTitular: f.cuit.replace(/\D/g, '') === f.cliente_cuit.replace(/\D/g, ''),
       vistoEn: f.visto_en,
     }));
 
@@ -824,6 +842,7 @@ export function crearRepositorioSqlite(opciones: OpcionesSqlite): Repositorio & 
         for (const cuit of cuits) {
           const digitos = cuit.replace(/\D/g, '');
           if (digitos.length !== 11) continue;
+          const guardado = canonico(digitos);
           // Acumulativo: cada servicio ve su propia lista de delegaciones, y
           // borrar las que este no ofrece haria desaparecer del panel empresas
           // que si existen en otro. Solo se pisa `visto_en`.
@@ -834,7 +853,7 @@ export function crearRepositorioSqlite(opciones: OpcionesSqlite): Repositorio & 
                 SET visto_en = excluded.visto_en,
                     actualizado_en = excluded.actualizado_en`,
             clienteId,
-            digitos,
+            guardado,
             servicio,
             ahora,
           );
@@ -960,12 +979,12 @@ export function crearRepositorioSqlite(opciones: OpcionesSqlite): Repositorio & 
       try {
         for (const notificacion of notificaciones) {
           const yaExistia = existentes.has(
-            clave(notificacion.contribuyenteCuit, notificacion.idComunicacion),
+            clave(canonico(notificacion.contribuyenteCuit), notificacion.idComunicacion),
           );
           const parametros = [
             randomUUID(),
             clienteId,
-            notificacion.contribuyenteCuit,
+            canonico(notificacion.contribuyenteCuit),
             notificacion.idComunicacion,
             notificacion.fecha,
             notificacion.organismo,
@@ -976,7 +995,7 @@ export function crearRepositorioSqlite(opciones: OpcionesSqlite): Repositorio & 
             guardarConDetalle.run(...parametros, notificacion.detalle.cuerpo);
             const fila = idNotificacion.get(
               clienteId,
-              notificacion.contribuyenteCuit,
+              canonico(notificacion.contribuyenteCuit),
               notificacion.idComunicacion,
             ) as
               | { id: string }
@@ -1409,7 +1428,7 @@ export function crearRepositorioSqlite(opciones: OpcionesSqlite): Repositorio & 
           insertarPlan.run(
             planId,
             clienteId,
-            plan.contribuyenteCuit,
+            canonico(plan.contribuyenteCuit),
             plan.numero,
             plan.concepto,
             plan.fechaPresentacion,
