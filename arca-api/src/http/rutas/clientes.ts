@@ -210,7 +210,10 @@ export function rutasClientes(repo: Repositorio, config: Config): Router {
     if (!empresa) throw new ErrorHttp(400, 'El CUIT de la empresa no es válido.');
 
     const disponibles = await repo.empresasDe(cliente.id);
-    if (!disponibles.some((candidata) => candidata.cuit === empresa)) {
+    // Comparado en digitos: `empresaPedida` normaliza asi y el repositorio
+    // guarda con guiones. Comparar los strings crudos no matchea nunca, y el
+    // 404 resultante se ve en la pantalla como "No existe ese cliente".
+    if (!disponibles.some((candidata) => candidata.cuit.replace(/\D/g, '') === empresa)) {
       throw new ErrorHttp(404, 'Esa empresa no está entre las de esta cuenta.');
     }
     res.status(202).json(await repo.encolarSync(cliente.id, 'sincronizacion-completa', empresa));
@@ -228,7 +231,10 @@ export function rutasClientes(repo: Repositorio, config: Config): Router {
       const disponibles = await repo.empresasDe(cliente.id);
       // 404 y no 403, igual que `clienteVisible`: no confirmamos que un CUIT
       // exista bajo otra cuenta.
-      if (!disponibles.some((candidata) => candidata.cuit === empresa)) {
+      // Comparado en digitos: `empresaPedida` normaliza asi y el repositorio
+    // guarda con guiones. Comparar los strings crudos no matchea nunca, y el
+    // 404 resultante se ve en la pantalla como "No existe ese cliente".
+    if (!disponibles.some((candidata) => candidata.cuit.replace(/\D/g, '') === empresa)) {
         throw new ErrorHttp(404, 'Esa empresa no está entre las de esta cuenta.');
       }
     }

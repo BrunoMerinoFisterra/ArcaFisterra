@@ -1159,6 +1159,47 @@ for (const [motor, crearRepo] of MOTORES) {
       }
     });
 
+    test('filtrar por empresa acepta el CUIT como lo devuelve el panel', async () => {
+      const s = await levantar(crearRepo);
+      try {
+        const admin = await s.login('bruno@fisterra.com');
+
+        // El panel entrega el CUIT con guiones; la ruta lo normaliza a digitos.
+        // Comparar los dos strings crudos no matchea nunca, y ese 404 se ve en
+        // la pantalla como "No existe ese cliente" — que manda a buscar el
+        // problema al lado equivocado.
+        const empresas = (await (await s.get('/clientes/c1/empresas', admin)).json()) as Array<{
+          cuit: string;
+        }>;
+        assert.ok(empresas.length > 0, 'la cuenta deberia tener al menos su titular');
+        const cuit = empresas[0]!.cuit;
+
+        const conGuiones = await s.get(`/clientes/c1?empresa=${encodeURIComponent(cuit)}`, admin);
+        assert.equal(conGuiones.status, 200, 'con el CUIT tal cual lo da el panel');
+
+        const sinGuiones = await s.get(
+          `/clientes/c1?empresa=${cuit.replace(/\D/g, '')}`,
+          admin,
+        );
+        assert.equal(sinGuiones.status, 200, 'y tambien en digitos');
+      } finally {
+        await s.cerrar();
+      }
+    });
+
+    test('no se puede espiar una empresa que no es de esa cuenta', async () => {
+      const s = await levantar(crearRepo);
+      try {
+        const admin = await s.login('bruno@fisterra.com');
+        // 404 y no 403: confirmar que el CUIT existe bajo otra cuenta ya seria
+        // filtrar, igual que en `clienteVisible`.
+        const r = await s.get('/clientes/c1?empresa=30-70987654-2', admin);
+        assert.equal(r.status, 404);
+      } finally {
+        await s.cerrar();
+      }
+    });
+
     test('una cuenta comun no puede repartir permisos de admin', async () => {
       const s = await levantar(crearRepo);
       try {

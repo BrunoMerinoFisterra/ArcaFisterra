@@ -171,7 +171,10 @@ export function crearRepositorioSqlite(opciones: OpcionesSqlite): Repositorio & 
               c.razon_social  AS cliente_razon
          FROM arca_representados r
          JOIN arca_clientes c ON c.id = r.cliente_id
-         LEFT JOIN arca_contribuyentes p ON p.cuit = r.cuit
+         -- El cache del padron guarda el CUIT en digitos y los representados
+         -- con guiones. Sin normalizar, el JOIN no matchea nunca y toda
+         -- empresa se muestra con su numero en vez de su razon social.
+         LEFT JOIN arca_contribuyentes p ON p.cuit = REPLACE(r.cuit, '-', '')
          ${donde}
         ORDER BY c.razon_social, p.nombre, r.cuit`,
       parametro,
@@ -216,7 +219,7 @@ export function crearRepositorioSqlite(opciones: OpcionesSqlite): Repositorio & 
     const filtroCuit = contribuyenteCuit ? ' AND contribuyente_cuit = ?' : '';
     const args: string[] = [clienteId];
     if (notificacionId) args.push(notificacionId);
-    if (contribuyenteCuit) args.push(contribuyenteCuit);
+    if (contribuyenteCuit) args.push(canonico(contribuyenteCuit));
     const filas = todos<FilaNotificacion>(
       `SELECT * FROM arca_notificaciones
         WHERE cliente_id = ?${filtroId}${filtroCuit}
@@ -226,11 +229,16 @@ export function crearRepositorioSqlite(opciones: OpcionesSqlite): Repositorio & 
     if (filas.length === 0) return [];
 
     const filtroAdjuntoId = notificacionId ? ' AND n.id = ?' : '';
+    // Los MISMOS filtros y en el mismo orden que la consulta de arriba, porque
+    // comparte `args`. Al sumar el filtro por empresa alla y no aca, esta
+    // recibia un parametro de mas y fallaba con "column index out of range" —
+    // y como el detalle entero se arma con esto, la pantalla quedaba en 404.
+    const filtroCuitAdjunto = contribuyenteCuit ? ' AND n.contribuyente_cuit = ?' : '';
     const adjuntos = todos<FilaAdjunto>(
       `SELECT a.id, a.notificacion_id, a.nombre, a.mime_type, a.tamano
          FROM arca_notificacion_adjuntos a
          JOIN arca_notificaciones n ON n.id = a.notificacion_id
-        WHERE n.cliente_id = ?${filtroAdjuntoId}
+        WHERE n.cliente_id = ?${filtroAdjuntoId}${filtroCuitAdjunto}
         ORDER BY a.nombre`,
       ...args,
     );
@@ -1986,6 +1994,17 @@ function sembrarSiVacia(db: DatabaseSync): void {
     notif.run('n4', 'c2', 'c2', 'ARCA-1004', dia(-3), 'Aviso de vencimiento de plan de facilidades', 0);
     notif.run('n5', 'c3', 'c3', 'ARCA-1005', dia(-9), 'Recategorización de Monotributo disponible', 1);
     notif.run('n6', 'c4', 'c4', 'ARCA-1006', dia(-4), 'Notificación de deuda — Aportes Seguridad Social', 0);
+
+    // Cada cuenta de demo se representa a si misma, que es lo que pasa de
+    // verdad apenas se sincroniza por primera vez. Sin esto el panel de
+    // empresas arranca vacio en este motor y en el otro no.
+    const representado = db.prepare(
+      `INSERT OR IGNORE INTO arca_representados (cliente_id, cuit, visto_en, actualizado_en)
+       VALUES (?, (SELECT cuit FROM arca_clientes WHERE id = ?), 'demo', ?)`,
+    );
+    for (const clienteId of ['c1', 'c2', 'c3', 'c4', 'c5', 'c6']) {
+      representado.run(clienteId, clienteId, new Date().toISOString());
+    }
 
     const saldo = db.prepare(
       `INSERT INTO arca_saldos
