@@ -216,3 +216,58 @@ test('agrega leases a una cola existente antes de crear su indice', async () => 
     await rm(carpeta, { recursive: true, force: true });
   }
 });
+
+/**
+ * Dos empresas de la misma cuenta pueden tener su job a la vez, y lo siguen
+ * pudiendo despues de reabrir la base.
+ *
+ * El indice unico de la cola tiene que separar por empresa. El paso que lo
+ * creaba asi se salteaba apenas `contribuyente_cuit` existia —o sea siempre en
+ * una base nueva, donde `esquema.sql` ya la trae— y el paso anterior lo dejaba
+ * sin la empresa: encolar la segunda moria con "UNIQUE constraint failed".
+ *
+ * Reabrir es la otra mitad. Las migraciones corren en cada arranque de la API y
+ * de cada worker sobre la misma base, asi que un indice que solo sobrevive al
+ * primero no sirve de nada — y una limpieza de duplicados que no mire la
+ * empresa cancelaria en ese arranque el job de la otra.
+ */
+test('dos empresas de la misma cuenta tienen su job, tambien al reabrir', async () => {
+  const carpeta = await mkdtemp(join(tmpdir(), 'arcapanel-jobs-empresa-'));
+  const archivo = join(carpeta, 'cola.db');
+  let repo = crearRepositorioSqlite({ archivo, sembrar: false });
+  try {
+    const usuario = await repo.crearUsuario({
+      email: 'oficina@example.com',
+      nombre: 'Oficina',
+      passwordHash: 'no-importa',
+      limiteClientes: 10,
+    });
+    const cuenta = await repo.crearCliente(
+      { cuit: '30-70000000-0', razonSocial: 'Cuenta con dos representadas' },
+      usuario.id,
+    );
+
+    const a = await repo.encolarSync(cuenta.id, 'sincronizacion-completa', '30-11111111-2');
+    const b = await repo.encolarSync(cuenta.id, 'sincronizacion-completa', '30-22222222-3');
+    assert.notEqual(a.id, b.id, 'cada empresa tiene que tener su propio job');
+
+    repo.cerrar();
+    repo = crearRepositorioSqlite({ archivo, sembrar: false });
+
+    const pendientes = (await repo.jobsDe(cuenta.id)).filter((job) => job.estado === 'PENDING');
+    assert.deepEqual(
+      pendientes.map((job) => job.contribuyenteCuit).sort(),
+      ['30111111112', '30222222223'],
+      'reabrir la base no puede cancelar el job de la otra empresa',
+    );
+
+    // Y el indice tiene que seguir separando por empresa, no solo la primera vez.
+    const c = await repo.encolarSync(cuenta.id, 'sincronizacion-completa', '30-33333333-4');
+    assert.equal(c.contribuyenteCuit, '30333333334');
+    assert.notEqual(c.id, a.id);
+    assert.notEqual(c.id, b.id);
+  } finally {
+    repo.cerrar();
+    await rm(carpeta, { recursive: true, force: true });
+  }
+});

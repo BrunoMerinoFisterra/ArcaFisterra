@@ -23,8 +23,10 @@ export function prepararEsquemaSqlite(db: DatabaseSync, esquema: string): void {
   // Una reconstruccion elimina los indices de la tabla anterior.
   db.exec(esquema);
   asegurarColumnasJobs(db);
-  asegurarUnSoloJobActivo(db);
+  // La columna primero: `asegurarUnSoloJobActivo` la nombra en el indice y en
+  // la limpieza de duplicados, y es el unico paso que crea ese indice.
   asegurarJobPorEmpresa(db);
+  asegurarUnSoloJobActivo(db);
   unificarFormatoContribuyente(db);
   limpiarDetalleAutorizacionAnterior(db);
 
@@ -626,6 +628,18 @@ function migrarComprobantesConCodigo(db: DatabaseSync): void {
   }
 }
 
+/**
+ * Un solo job activo por cliente, modulo, solicitud y empresa.
+ *
+ * Es el UNICO lugar que crea `ux_jobs_cliente_modulo_activo`, y corre despues
+ * de `asegurarJobPorEmpresa` para poder nombrar `contribuyente_cuit` sin
+ * chequear si existe. Mientras el indice se creaba en dos pasos distintos, el
+ * segundo pisaba al primero y la base terminaba con la version equivocada.
+ *
+ * Las cuatro columnas van juntas en la limpieza y en el indice a proposito: si
+ * la particion del UPDATE no coincide con el indice, cada arranque cancelaria
+ * como "duplicados" jobs que el indice si permite convivir.
+ */
 function asegurarUnSoloJobActivo(db: DatabaseSync): void {
   db.exec('BEGIN IMMEDIATE');
   try {
@@ -639,7 +653,8 @@ function asegurarUnSoloJobActivo(db: DatabaseSync): void {
          SELECT id FROM (
            SELECT id,
                   ROW_NUMBER() OVER (
-                    PARTITION BY cliente_id, modulo, COALESCE(solicitud_id, '')
+                    PARTITION BY cliente_id, modulo, COALESCE(solicitud_id, ''),
+                                 COALESCE(contribuyente_cuit, '')
                     ORDER BY creado_en, id
                   ) AS orden
              FROM arca_sync_jobs
@@ -652,12 +667,16 @@ function asegurarUnSoloJobActivo(db: DatabaseSync): void {
       -- mientras todos los jobs eran sincronizaciones, pero dos oficinas
       -- distintas pidiendo acceso a la misma empresa generan dos jobs
       -- 'verificar-acceso' del mismo cliente_id y chocaban entre si: la
-      -- segunda solicitud moria con un error de constraint. Agregar el
-      -- solicitud_id los separa sin aflojar la regla para el sync, donde la
-      -- columna es NULL y COALESCE la vuelve la cadena vacia para todos.
+      -- segunda solicitud moria con un error de constraint. Lo mismo pasa
+      -- entre dos empresas de una misma cuenta. Agregar solicitud_id y
+      -- contribuyente_cuit los separa sin aflojar la regla para el sync de
+      -- toda la cuenta, donde las dos columnas son NULL y COALESCE las vuelve
+      -- la cadena vacia para todos.
       DROP INDEX IF EXISTS ux_jobs_cliente_modulo_activo;
       CREATE UNIQUE INDEX IF NOT EXISTS ux_jobs_cliente_modulo_activo
-        ON arca_sync_jobs (cliente_id, modulo, COALESCE(solicitud_id, ''))
+        ON arca_sync_jobs (
+          cliente_id, modulo, COALESCE(solicitud_id, ''), COALESCE(contribuyente_cuit, '')
+        )
         WHERE estado IN ('PENDING', 'RUNNING');
       COMMIT;
     `);
@@ -667,18 +686,6 @@ function asegurarUnSoloJobActivo(db: DatabaseSync): void {
   }
 }
 
-/**
- * Permite encolar un job apuntado a UNA empresa representada.
- *
- * La columna es nullable y NULL significa "toda la cuenta", que es el
- * comportamiento de siempre: por eso alcanza un ALTER y no hace falta
- * reconstruir la tabla.
- *
- * El indice tiene que incluirla o sincronizar la empresa A bloquearia encolar
- * la B de la misma cuenta, que no tienen nada que ver entre si. Que despues
- * corran de a una la garantiza `arca_sync_locks`, que serializa por cuenta
- * ARCA — esa es la proteccion real contra dos logins simultaneos, no el indice.
- */
 /**
  * Deja todos los CUIT de contribuyente con guiones, que es como ya guardaban
  * las cuatro tablas viejas.
@@ -744,25 +751,25 @@ function unificarFormatoContribuyente(db: DatabaseSync): void {
   }
 }
 
+/**
+ * Permite encolar un job apuntado a UNA empresa representada.
+ *
+ * La columna es nullable y NULL significa "toda la cuenta", que es el
+ * comportamiento de siempre: por eso alcanza un ALTER y no hace falta
+ * reconstruir la tabla.
+ *
+ * Agrega la columna y nada mas. El indice que la usa lo crea
+ * `asegurarUnSoloJobActivo`, que corre inmediatamente despues: aca se salteaba
+ * todo el paso apenas la columna existia —siempre, en una base nueva, donde
+ * `esquema.sql` ya la trae— y el indice quedaba sin la empresa. Con ese indice,
+ * sincronizar la empresa A bloqueaba encolar la B de la misma cuenta, que no
+ * tienen nada que ver entre si. Que despues corran de a una la garantiza
+ * `arca_sync_locks`, que serializa por cuenta ARCA — esa es la proteccion real
+ * contra dos logins simultaneos, no el indice.
+ */
 function asegurarJobPorEmpresa(db: DatabaseSync): void {
   const columnas = db.prepare('PRAGMA table_info(arca_sync_jobs)').all() as Array<{ name: string }>;
   if (columnas.some((columna) => columna.name === 'contribuyente_cuit')) return;
 
-  db.exec('BEGIN IMMEDIATE');
-  try {
-    db.exec(`
-      ALTER TABLE arca_sync_jobs ADD COLUMN contribuyente_cuit TEXT;
-
-      DROP INDEX IF EXISTS ux_jobs_cliente_modulo_activo;
-      CREATE UNIQUE INDEX IF NOT EXISTS ux_jobs_cliente_modulo_activo
-        ON arca_sync_jobs (
-          cliente_id, modulo, COALESCE(solicitud_id, ''), COALESCE(contribuyente_cuit, '')
-        )
-        WHERE estado IN ('PENDING', 'RUNNING');
-      COMMIT;
-    `);
-  } catch (error) {
-    db.exec('ROLLBACK');
-    throw error;
-  }
+  db.exec('ALTER TABLE arca_sync_jobs ADD COLUMN contribuyente_cuit TEXT');
 }
