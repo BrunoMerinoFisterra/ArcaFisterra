@@ -287,6 +287,24 @@ export interface DetalleCliente {
   comprobantes: Comprobante[];
 }
 
+/**
+ * La tarjeta del panel: una empresa con sus propios numeros.
+ *
+ * Lleva el estado de la CUENTA que la representa porque de eso depende que se
+ * pueda sincronizar: una clave fiscal invalida deja a todas sus empresas sin
+ * actualizar, y sin este dato la tarjeta se veria sana mientras envejece.
+ */
+export interface ResumenEmpresa {
+  empresa: EmpresaRepresentada;
+  notificacionesSinLeer: number;
+  cuotasImpagas: number;
+  vencimientosProximos: number;
+  saldoTotal: number;
+  tieneSaldos: boolean;
+  estadoCredencial: EstadoCredencial;
+  estadoSync: EstadoSync;
+}
+
 export interface ResumenCliente {
   cliente: Cliente;
   notificacionesSinLeer: number;

@@ -337,6 +337,23 @@ body {
   margin: 0 0 10px;
 }
 
+/* --- Bloque: encabezado y grilla, sin panel alrededor ---
+   Las cards ya son superficies. Meterlas adentro de un .seccion las apoya
+   sobre otra del mismo color y se pierden: el titulo va suelto sobre el fondo
+   de la pagina y las tarjetas quedan como unico relieve. */
+.bloque {
+  margin-bottom: 26px;
+}
+.bloque__titulo {
+  margin: 0 0 2px;
+  color: var(--fs-ink);
+  font-size: 14px;
+  font-weight: var(--fs-weight-bold);
+}
+.bloque__bajada {
+  margin: 0 0 12px;
+}
+
 /* --- Cards de cliente --- */
 .grilla {
   display: grid;
@@ -345,7 +362,11 @@ body {
 }
 
 .card {
-  display: block;
+  /* Columna, y no block, para que el pie se pueda empujar abajo: la grilla
+     estira todas las cards de una fila a la mas alta, y sin esto las cortas
+     dejaban el contenido flotando arriba con un hueco muerto debajo. */
+  display: flex;
+  flex-direction: column;
   background: var(--superficie);
   border: 1px solid var(--borde);
   border-radius: var(--radio);
@@ -374,6 +395,11 @@ body {
   font-size: 15px;
 }
 .card__cuit {
+  /* Flex para poder acompañar el CUIT con un badge —"Titular"— sin que quede
+     pegado. Con solo texto adentro se comporta igual que antes. */
+  display: flex;
+  align-items: center;
+  gap: 8px;
   color: var(--texto-tenue);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
@@ -420,7 +446,11 @@ body {
   font-size: 12px;
 }
 .card__pie {
-  margin-top: 12px;
+  /* `auto` se come el sobrante de la fila y deja el pie pegado abajo, asi las
+     cards de una misma fila alinean su ultima linea aunque tengan distinto
+     contenido. El aire minimo lo pone el padding. */
+  margin-top: auto;
+  padding-top: 12px;
   color: var(--texto-tenue);
   font-size: 11.5px;
 }

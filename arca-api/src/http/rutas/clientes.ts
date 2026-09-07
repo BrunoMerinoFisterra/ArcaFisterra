@@ -3,7 +3,12 @@ import { z } from 'zod';
 import type { Config } from '../../config.js';
 import { cifrarAccesoArca } from '../../crypto/envelope.js';
 import { formatearCuit, validarCuit } from '../../dominio/cuit.js';
-import { armarResumen, porUrgencia } from '../../dominio/resumen.js';
+import {
+  armarResumen,
+  armarResumenEmpresa,
+  porUrgencia,
+  porUrgenciaEmpresa,
+} from '../../dominio/resumen.js';
 import type { Repositorio } from '../../repo/tipos.js';
 import { requiereAuth, usuarioDe } from '../auth.js';
 import { clienteNoEncontrado, ErrorHttp } from '../errores.js';
@@ -183,7 +188,20 @@ export function rutasClientes(repo: Repositorio, config: Config): Router {
    */
   router.get('/empresas', async (req, res) => {
     const usuario = usuarioDe(req);
-    res.json(await repo.empresasDeUsuario(usuario.id));
+    const empresas = await repo.empresasDeUsuario(usuario.id);
+
+    // Las cuentas se leen una sola vez y se indexan: son pocas y varias
+    // empresas comparten la misma, asi que pedirla por empresa seria repetir
+    // la misma consulta N veces.
+    const cuentas = new Map(
+      (await repo.listarClientesDe(usuario.id)).map((cliente) => [cliente.id, cliente]),
+    );
+    const resumenes = await Promise.all(
+      empresas
+        .filter((empresa) => cuentas.has(empresa.clienteId))
+        .map((empresa) => armarResumenEmpresa(repo, empresa, cuentas.get(empresa.clienteId)!)),
+    );
+    res.json(resumenes.sort(porUrgenciaEmpresa));
   });
 
   /** Las empresas que esta cuenta representa, para el panel y el selector. */

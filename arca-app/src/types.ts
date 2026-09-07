@@ -105,6 +105,24 @@ export interface EmpresaRepresentada {
   vistoEn: string;
 }
 
+/**
+ * La tarjeta del panel: una empresa con sus propios números.
+ *
+ * `estadoCredencial` y `estadoSync` son de la CUENTA que la representa, no de
+ * la empresa: si esa clave fiscal está invalidada, los números de la empresa se
+ * quedan viejos aunque ella no tenga nada raro.
+ */
+export interface ResumenEmpresa {
+  empresa: EmpresaRepresentada;
+  notificacionesSinLeer: number;
+  cuotasImpagas: number;
+  vencimientosProximos: number;
+  saldoTotal: number;
+  tieneSaldos: boolean;
+  estadoCredencial: EstadoCredencial;
+  estadoSync: EstadoSync;
+}
+
 export interface Notificacion {
   id: string;
   clienteId: string;

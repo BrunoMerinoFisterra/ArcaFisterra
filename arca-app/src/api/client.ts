@@ -12,6 +12,7 @@ import type {
   EmpresaRepresentada,
   Notificacion,
   ResumenCliente,
+  ResumenEmpresa,
   SolicitudAcceso,
   SyncJob,
   Usuario,
@@ -127,9 +128,14 @@ export function listarResumenClientes(): Promise<ResumenCliente[]> {
   return pedir<ResumenCliente[]>('/clientes');
 }
 
-/** Todas las empresas del usuario, de todas sus cuentas. Arma el panel. */
-export function listarEmpresas(): Promise<EmpresaRepresentada[]> {
-  return pedir<EmpresaRepresentada[]>('/clientes/empresas');
+/**
+ * El panel: una fila por (cuenta, empresa) con sus propios numeros.
+ *
+ * El orden por urgencia lo calcula el servidor, igual que el de cuentas: si lo
+ * hiciera cada cliente HTTP, dos frontends mostrarian prioridades distintas.
+ */
+export function listarEmpresas(): Promise<ResumenEmpresa[]> {
+  return pedir<ResumenEmpresa[]>('/clientes/empresas');
 }
 
 /** Las empresas de UNA cuenta, para el selector dentro del detalle. */
