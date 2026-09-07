@@ -249,10 +249,11 @@ export function rutasClientes(repo: Repositorio, config: Config): Router {
       const disponibles = await repo.empresasDe(cliente.id);
       // 404 y no 403, igual que `clienteVisible`: no confirmamos que un CUIT
       // exista bajo otra cuenta.
-      // Comparado en digitos: `empresaPedida` normaliza asi y el repositorio
-    // guarda con guiones. Comparar los strings crudos no matchea nunca, y el
-    // 404 resultante se ve en la pantalla como "No existe ese cliente".
-    if (!disponibles.some((candidata) => candidata.cuit.replace(/\D/g, '') === empresa)) {
+      //
+      // La comparación va en dígitos por lo mismo que en la ruta de
+      // sincronizar: `empresaPedida` normaliza así y el repositorio guarda con
+      // guiones, así que los strings crudos no matchean nunca.
+      if (!disponibles.some((candidata) => candidata.cuit.replace(/\D/g, '') === empresa)) {
         throw new ErrorHttp(404, 'Esa empresa no está entre las de esta cuenta.');
       }
     }
