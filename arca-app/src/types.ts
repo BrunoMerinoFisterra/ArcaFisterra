@@ -97,6 +97,14 @@ export interface EmpresaRepresentada {
   clienteId: string;
   cuit: string;
   nombre: string;
+  /**
+   * Si `nombre` es una razón social de verdad o el CUIT haciendo de relleno.
+   *
+   * Lo manda el servidor en vez de deducirse comparando `nombre` con `cuit`:
+   * hoy son el mismo string cuando falta el nombre, pero eso es un detalle del
+   * fallback y la pantalla que ofrece "poner nombre" no puede depender de él.
+   */
+  nombreCargado: boolean;
   representante: {
     cuit: string;
     razonSocial: string;

@@ -72,6 +72,15 @@ export interface EmpresaRepresentada {
   cuit: string;
   /** Razón social resuelta del padrón; el CUIT si todavía no se conoce. */
   nombre: string;
+  /**
+   * Si `nombre` es una razón social de verdad o el CUIT haciendo de relleno.
+   *
+   * Va explícito y no se deduce comparando `nombre` con `cuit`: hoy son el
+   * mismo string cuando falta el nombre, pero eso es un detalle de cómo se
+   * arma el fallback, y una pantalla que ofrece "poner nombre" no puede
+   * depender de que ese detalle no cambie.
+   */
+  nombreCargado: boolean;
   /** Datos de la cuenta, para mostrar el representante al lado. */
   representante: {
     cuit: string;

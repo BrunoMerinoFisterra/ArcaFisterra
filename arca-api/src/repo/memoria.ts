@@ -174,10 +174,12 @@ export async function crearRepositorioMemoria(): Promise<Repositorio> {
       const cliente = clientes.find((candidato) => candidato.id === clienteId);
       if (!cliente) continue;
       for (const [cuit, vistoEn] of representados.get(clienteId) ?? []) {
+        const delPadron = nombresContribuyentes.get(cuit.replace(/\D/g, ''));
         filas.push({
           clienteId,
           cuit,
-          nombre: nombresContribuyentes.get(cuit.replace(/\D/g, '')) ?? cuit,
+          nombre: delPadron ?? cuit,
+          nombreCargado: delPadron !== undefined,
           representante: { cuit: cliente.cuit, razonSocial: cliente.razonSocial },
           esTitular: cuit.replace(/\D/g, '') === cliente.cuit.replace(/\D/g, ''),
           vistoEn,

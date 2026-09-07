@@ -735,6 +735,26 @@ body {
 .grupo-cuit__cabecera strong {
   font-size: 13px;
 }
+/* El widget de razón social se usa dentro de esta cabecera y también suelto, en
+   la lista de empresas de la cuenta. Ahí no heredaba el flex de
+   `.grupo-cuit__cabecera div` y el nombre, el botón y el formulario de edición
+   quedaban pegados entre sí. */
+.grupo-cuit__nombre {
+  display: inline-flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+/* Crece hasta donde haya lugar y baja de línea si no lo hay: con el ancho por
+   defecto del navegador una razón social entra recortada justo mientras se la
+   está escribiendo, que es cuando hace falta leerla entera. */
+.grupo-cuit__nombre input {
+  /* Sin `grow`: con el ancho por defecto una razón social entra recortada justo
+     mientras se la escribe, pero dejándolo crecer se come la fila y empuja
+     "Cancelar" abajo. 260px entra cómodo y deja los dos botones en la línea. */
+  flex: 0 1 260px;
+  min-width: 0;
+}
 .grupo-cuit .paginacion {
   padding: 0 10px 10px;
 }
@@ -1160,6 +1180,47 @@ body {
 }
 .gestion__bloque--clientes {
   grid-column: 1 / -1;
+}
+
+/* Empresas representadas dentro del panel de gestión de una cuenta. */
+.empresas-cuenta {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.empresas-cuenta__fila {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 9px 11px;
+  border: 1px solid var(--borde);
+  border-radius: 9px;
+  background: var(--superficie);
+}
+/* Ancho fijo y no `auto`: el badge Titular ensancha sólo algunas filas, y sin
+   esto las razones sociales arrancan en una x distinta en cada una. */
+.empresas-cuenta__cuit {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex: 0 0 auto;
+  min-width: 180px;
+}
+/* El nombre se queda con el espacio libre de la fila. Sin esto se dimensiona
+   por contenido, y al editar el input más los dos botones no entraban en una
+   línea aunque sobraran 400px a la derecha: "Cancelar" bajaba solo. */
+.empresas-cuenta__fila .grupo-cuit__nombre {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* Empuja el servicio al final: es el dato menos importante de la fila y así no
+   se mete entre el CUIT y el nombre, que es lo que se viene a editar. */
+.empresas-cuenta__visto {
+  margin-left: auto;
 }
 .tabla--compacta th,
 .tabla--compacta td {

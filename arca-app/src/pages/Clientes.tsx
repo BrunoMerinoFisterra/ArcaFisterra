@@ -5,6 +5,8 @@ import {
   esperarJob,
   esperarSolicitud,
   guardarCredencial,
+  guardarNombreContribuyente,
+  listarEmpresasDeCliente,
   obtenerAdministracionClientes,
   pedirAccesoAEmpresa,
   sincronizarCompleto,
@@ -13,12 +15,14 @@ import {
 import type {
   AdministracionClientes,
   Cliente,
+  EmpresaRepresentada,
   SolicitudAcceso,
   SyncJob,
 } from '../types';
 import { desde } from '../lib/format';
 import { Badge, EstadoSyncBadge } from '../components/Badge';
 import { ModalCargando } from '../components/ModalCargando';
+import { NombreContribuyente } from '../components/NombreContribuyente';
 import { plural } from '../lib/plural';
 
 export default function Clientes() {
@@ -499,6 +503,100 @@ function PanelGestion({
         )}
       </div>}
 
+      {!bloqueadoPorCupo && <EmpresasDeLaCuenta cliente={cliente} />}
+    </div>
+  );
+}
+
+/**
+ * Las empresas que esta cuenta representa, con su razón social editable.
+ *
+ * Es el único lugar donde se pueden nombrar TODAS. Los grupos por CUIT del
+ * detalle también dejan hacerlo, pero sólo existen para las empresas que
+ * tienen datos en ese módulo: una que ARCA ofrece y todavía no tiene
+ * movimientos no aparece en ninguno, y quedaba sin forma de dejar de verse
+ * como un número suelto en el panel.
+ *
+ * Se pide al abrir el panel y no con la lista de clientes: son N pedidos que
+ * casi nunca se miran, y el listado de clientes tiene que cargar rápido.
+ */
+function EmpresasDeLaCuenta({ cliente }: { cliente: Cliente }) {
+  const [empresas, setEmpresas] = useState<EmpresaRepresentada[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let vigente = true;
+    listarEmpresasDeCliente(cliente.id)
+      .then((e) => {
+        if (vigente) setEmpresas(e);
+      })
+      .catch((e: unknown) => {
+        if (vigente) setError(e instanceof Error ? e.message : 'No se pudieron cargar las empresas.');
+      });
+    return () => {
+      vigente = false;
+    };
+  }, [cliente.id]);
+
+  /**
+   * Refleja el nombre nuevo sin volver a pedir la lista.
+   *
+   * El CUIT se compara en dígitos: la lista lo trae con guiones y la respuesta
+   * devuelve el que se mandó, y hacer que esto dependa de que coincidan de
+   * formato es justo el error que ya rompió el filtro por empresa una vez.
+   */
+  async function ponerNombre(cuit: string, nombre: string) {
+    const guardado = await guardarNombreContribuyente(cuit, nombre);
+    const digitos = guardado.cuit.replace(/\D/g, '');
+    setEmpresas((actuales) =>
+      (actuales ?? []).map((empresa) =>
+        empresa.cuit.replace(/\D/g, '') === digitos
+          ? { ...empresa, nombre: guardado.nombre, nombreCargado: true }
+          : empresa,
+      ),
+    );
+  }
+
+  return (
+    <div className="gestion__bloque gestion__bloque--clientes">
+      <h3>3. Empresas representadas</h3>
+      <p className="tenue">
+        Las que ARCA ofrece bajo esta clave fiscal. El nombre es del CUIT, no de la cuenta: cargarlo
+        acá lo muestra en todo el panel.
+      </p>
+
+      {error && <p className="campo__error">{error}</p>}
+      {!error && empresas === null && <p className="tenue">Cargando empresas…</p>}
+      {!error && empresas?.length === 0 && (
+        <p className="tenue">
+          Todavía no hay ninguna. Aparecen después de la primera sincronización, con lo que ARCA
+          ofrezca en cada servicio.
+        </p>
+      )}
+
+      {empresas && empresas.length > 0 && (
+        <ul className="empresas-cuenta">
+          {empresas.map((empresa) => (
+            <li className="empresas-cuenta__fila" key={empresa.cuit}>
+              <div className="empresas-cuenta__cuit">
+                <span className="mono">{empresa.cuit}</span>
+                {empresa.esTitular && <Badge tono="neutro">Titular</Badge>}
+              </div>
+              <NombreContribuyente
+                cuit={empresa.cuit}
+                // `undefined` y no el CUIT de relleno: es lo que hace que el
+                // botón ofrezca "Poner nombre" en vez de "Editar nombre" y que
+                // el input arranque vacío en lugar de con el número adentro.
+                nombre={empresa.nombreCargado ? empresa.nombre : undefined}
+                alGuardar={ponerNombre}
+              />
+              <span className="tenue empresas-cuenta__visto">
+                {empresa.vistoEn ? `Visto en ${empresa.vistoEn}` : 'Sin registro de servicios'}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

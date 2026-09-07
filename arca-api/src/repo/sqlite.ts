@@ -182,6 +182,7 @@ export function crearRepositorioSqlite(opciones: OpcionesSqlite): Repositorio & 
       clienteId: f.cliente_id,
       cuit: f.cuit,
       nombre: f.nombre ?? f.cuit,
+      nombreCargado: f.nombre !== null,
       representante: { cuit: f.cliente_cuit, razonSocial: f.cliente_razon },
       // Comparado en digitos: los dos vienen de la base pero de tablas que
       // podrian formatear distinto, y esto no debe depender de eso.

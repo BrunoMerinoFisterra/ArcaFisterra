@@ -30,6 +30,7 @@ import { descargarCsv, type ValorCsv } from '../lib/csv';
 import { Badge, EstadoSyncBadge } from '../components/Badge';
 import { ModalGraficoComprobantes } from '../components/GraficoComprobantes';
 import { ModalCargando } from '../components/ModalCargando';
+import { NombreContribuyente } from '../components/NombreContribuyente';
 import { Paginacion, usePaginacion } from '../components/Paginacion';
 
 type ModuloActivo = 'completa' | 'domicilio' | 'saldos' | 'facilidades' | 'comprobantes';
@@ -721,92 +722,6 @@ function AgrupadosPorCuit<T extends { contribuyenteCuit: string }>({
         </section>
       ))}
     </div>
-  );
-}
-
-/**
- * Razón social del contribuyente, con carga inline.
- *
- * El CUIT NO se tipea: sale del dato agrupado. Eso evita el error más probable
- * de un formulario suelto — cargar un nombre contra un CUIT mal escrito, que
- * después no matchea con nada y nadie nota, porque el grupo sigue sin nombre.
- */
-function NombreContribuyente({
-  cuit,
-  nombre,
-  alGuardar,
-}: {
-  cuit: string;
-  nombre: string | undefined;
-  alGuardar: (cuit: string, nombre: string) => Promise<void>;
-}) {
-  const [editando, setEditando] = useState(false);
-  const [valor, setValor] = useState(nombre ?? '');
-  const [guardando, setGuardando] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  async function guardar() {
-    setGuardando(true);
-    setError(null);
-    try {
-      await alGuardar(cuit, valor.trim());
-      setEditando(false);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'No se pudo guardar el nombre.');
-    } finally {
-      setGuardando(false);
-    }
-  }
-
-  if (!editando) {
-    return (
-      <span className="grupo-cuit__nombre">
-        {nombre ? (
-          <strong>{nombre}</strong>
-        ) : (
-          <span className="tenue">Sin nombre cargado</span>
-        )}{' '}
-        <button
-          type="button"
-          className="enlace"
-          onClick={() => {
-            setValor(nombre ?? '');
-            setError(null);
-            setEditando(true);
-          }}
-        >
-          {nombre ? 'Editar nombre' : 'Poner nombre'}
-        </button>
-      </span>
-    );
-  }
-
-  return (
-    <span className="grupo-cuit__nombre">
-      <input
-        value={valor}
-        onChange={(e) => setValor(e.target.value)}
-        placeholder="Razón social"
-        aria-label={`Razón social de ${cuit}`}
-        autoFocus
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' && valor.trim().length >= 2) void guardar();
-          if (e.key === 'Escape') setEditando(false);
-        }}
-      />
-      <button
-        type="button"
-        className="btn btn--chico btn--primario"
-        disabled={valor.trim().length < 2 || guardando}
-        onClick={() => void guardar()}
-      >
-        {guardando ? 'Guardando…' : 'Guardar'}
-      </button>
-      <button type="button" className="btn btn--chico" onClick={() => setEditando(false)}>
-        Cancelar
-      </button>
-      {error && <span className="campo__error">{error}</span>}
-    </span>
   );
 }
 
