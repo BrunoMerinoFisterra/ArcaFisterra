@@ -290,36 +290,31 @@ está escrito para que esas piezas entren después sin rediseño —
 ... WITH (READPAST, UPDLOCK)` equivalente en T-SQL—; no introducir
 dependencias que lo compliquen.
 
-## Modo orquestador (autorizado por defecto)
+## Delegación en subagentes (sólo a pedido)
 
-En este repositorio Claude trabaja **delegando por defecto**: no hace falta
-pedírselo turno a turno. El hilo principal decide, delega y sintetiza; el
-trabajo pesado de lectura y escritura va en subagentes con contexto propio.
+En este repositorio Claude trabaja **solo por defecto**. Nada de workflows ni
+paneles de subagentes salvo que se pidan explícitamente en ese turno.
 
-Umbrales (los generales viven en el `CLAUDE.md` global; acá van los de este
-repo):
+La razón no es el costo sino qué cuenta como prueba acá. Lo que decide si un
+cambio está bien es mecánico —compilar y correr los tests—, y eso ya lo da
+`npm run check` sobre los tres módulos. Un panel de agentes opinando sobre si
+algo compila no agrega evidencia: agrega latencia y ruido. Para verificar hay
+que correr el build de verdad, y si la máquina no tiene Node instalado, correrlo
+en las imágenes de `deploy/` montando el `src` de trabajo encima.
 
-- Decidir o verificar sobre 1–3 archivos: inline.
-- Entender algo que abarca 4+ archivos: un subagente de exploración, que
-  devuelve un resumen corto y no el volcado de los archivos.
-- Escribir 2+ archivos no triviales: **un solo** subagente escritor.
-- Cambios mecánicos ya entendidos en un archivo: inline. Delegarlos cuesta
-  más de lo que ahorran.
+Cuando sí se pida delegar, dos restricciones que este repo impone igual:
 
-Delegar **grueso, no seguido**: cada subagente arranca en frío y no hereda el
-contexto del padre. Diez delegaciones de un archivo son diez arranques en
-frío; una de diez archivos es uno.
+- **Grueso, no seguido.** Cada subagente arranca en frío y no hereda el
+  contexto del padre. Diez delegaciones de un archivo son diez arranques en
+  frío; una de diez archivos es uno.
+- **Nunca escritores en paralelo.** `arca-worker` importa código fuente de
+  `arca-api` cruzando el límite de módulo, así que estos cambios son
+  intrínsecamente cross-module y partirlos entre agentes concurrentes rompe el
+  typecheck de los dos lados:
+  - `repo/tipos.ts`, `repo/sqlite.ts`, `esquema.sql`, `crypto/envelope.ts`.
+  - Los tipos espejados en `arca-api/src/dominio/tipos.ts`,
+    `arca-app/src/types.ts` y `arca-worker/src/arca/errors.ts`.
 
-### Por qué acá no van escritores en paralelo
-
-`arca-worker` importa código fuente de `arca-api` cruzando el límite de
-módulo. Eso hace que estos cambios sean intrínsecamente cross-module y que
-partirlos entre agentes concurrentes rompa el typecheck de ambos lados:
-
-- `repo/tipos.ts`, `repo/sqlite.ts`, `esquema.sql`, `crypto/envelope.ts`.
-- Los tipos espejados en `arca-api/src/dominio/tipos.ts`,
-  `arca-app/src/types.ts` y `arca-worker/src/arca/errors.ts`.
-
-Todo eso va en un único escritor, que cierra corriendo `npm run check` (que
-ya cubre el typecheck de los tres módulos). Worktrees aislados solo con
-aprobación explícita, y nunca para trabajo que toque esos archivos.
+  Todo eso va en un único escritor, que cierra corriendo `npm run check`.
+  Worktrees aislados sólo con aprobación explícita, y nunca para trabajo que
+  toque esos archivos.
