@@ -30,7 +30,7 @@ import { descargarCsv, type ValorCsv } from '../lib/csv';
 import { Badge, EstadoSyncBadge } from '../components/Badge';
 import { ModalGraficoComprobantes } from '../components/GraficoComprobantes';
 import { ModalCargando } from '../components/ModalCargando';
-import { NombreContribuyente } from '../components/NombreContribuyente';
+import { NombreEditable } from '../components/NombreEditable';
 import { Paginacion, usePaginacion } from '../components/Paginacion';
 
 type ModuloActivo = 'completa' | 'domicilio' | 'saldos' | 'facilidades' | 'comprobantes';
@@ -710,8 +710,9 @@ function AgrupadosPorCuit<T extends { contribuyenteCuit: string }>({
             <div>
               <span>Contribuyente ARCA</span>
               <strong className="mono">{cuit}</strong>
-              <NombreContribuyente
-                cuit={cuit}
+              <NombreEditable
+                id={cuit}
+                etiqueta={`Razón social de ${cuit}`}
                 nombre={nombres[cuit.replace(/\D/g, '')]}
                 alGuardar={alGuardarNombre}
               />

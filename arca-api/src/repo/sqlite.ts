@@ -749,6 +749,27 @@ export function crearRepositorioSqlite(opciones: OpcionesSqlite): Repositorio & 
       };
     },
 
+    async renombrarClienteDe(usuarioId, clienteId, razonSocial) {
+      // El EXISTS contra arca_user_clientes es el mismo aislamiento que el
+      // resto del repositorio, y va DENTRO del UPDATE a proposito: chequear
+      // aparte y despues escribir deja una ventana entre las dos consultas.
+      const r = correr(
+        `UPDATE arca_clientes
+            SET razon_social = ?
+          WHERE id = ?
+            AND EXISTS (
+              SELECT 1 FROM arca_user_clientes
+               WHERE usuario_id = ? AND cliente_id = arca_clientes.id
+            )`,
+        razonSocial,
+        clienteId,
+        usuarioId,
+      );
+      if (Number(r.changes) === 0) return null;
+      const f = uno<FilaCliente>(`${SELECT_CLIENTE_DE} AND c.id = ?`, usuarioId, clienteId);
+      return f ? aCliente(f) : null;
+    },
+
     async eliminarClienteDe(usuarioId, clienteId) {
       db.exec('BEGIN IMMEDIATE');
       try {

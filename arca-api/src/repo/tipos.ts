@@ -177,6 +177,24 @@ export interface Repositorio {
   obtenerClienteDe(usuarioId: string, clienteId: string): Promise<Cliente | null>;
   crearCliente(datos: { cuit: string; razonSocial: string }, usuarioId: string): Promise<Cliente>;
   existeCuit(cuit: string): Promise<boolean>;
+
+  /**
+   * Corrige la razón social de la cuenta. Devuelve null si no es visible.
+   *
+   * Lleva `usuarioId` como todo lo demás de clientes: sin eso, cambiar el id en
+   * la request renombraría la cuenta de otra oficina.
+   *
+   * El nombre es de la CUENTA y no de la asignación, así que si la empresa está
+   * compartida con otra oficina, la ven renombrada las dos. Es la misma
+   * decisión que en `arca_contribuyentes` —un CUIT tiene un nombre— y separar
+   * un alias por usuario obligaría a elegir cuál mostrar en cada pantalla.
+   */
+  renombrarClienteDe(
+    usuarioId: string,
+    clienteId: string,
+    razonSocial: string,
+  ): Promise<Cliente | null>;
+
   /**
    * Quita el cliente de la cuenta. Si estaba compartido, conserva los datos
    * para las otras cuentas; si era la última asignación, lo elimina completo.

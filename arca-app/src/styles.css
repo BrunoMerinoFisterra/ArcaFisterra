@@ -739,8 +739,13 @@ body {
    la lista de empresas de la cuenta. Ahí no heredaba el flex de
    `.grupo-cuit__cabecera div` y el nombre, el botón y el formulario de edición
    quedaban pegados entre sí. */
+/* `flex` y no `inline-flex`: como item de un contenedor flex —la cabecera del
+   grupo, la fila de empresas— dan lo mismo, porque ahí el display se blockifica
+   igual. La diferencia aparece colgando de un bloque, donde el shrink-to-fit de
+   un inline-flex con `wrap` se queda corto (341px teniendo 1122 disponibles) y
+   tira "Cancelar" abajo. */
 .grupo-cuit__nombre {
-  display: inline-flex;
+  display: flex;
   align-items: baseline;
   flex-wrap: wrap;
   gap: 8px;

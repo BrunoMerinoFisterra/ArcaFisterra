@@ -558,6 +558,14 @@ export async function crearRepositorioMemoria(): Promise<Repositorio> {
       };
     },
 
+    async renombrarClienteDe(usuarioId, clienteId, razonSocial) {
+      if (!puedeVer(usuarioId, clienteId)) return null;
+      const cliente = clientes.find((candidato) => candidato.id === clienteId);
+      if (!cliente) return null;
+      cliente.razonSocial = razonSocial;
+      return cliente;
+    },
+
     async eliminarClienteDe(usuarioId, clienteId) {
       asignaciones.get(usuarioId)?.delete(clienteId);
       const sigueAsignado = [...asignaciones.values()].some((set) => set.has(clienteId));

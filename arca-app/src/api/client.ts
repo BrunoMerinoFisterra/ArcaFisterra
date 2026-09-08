@@ -144,6 +144,19 @@ export function listarEmpresasDeCliente(clienteId: string): Promise<EmpresaRepre
 }
 
 /**
+ * Corrige la razón social de una cuenta.
+ *
+ * Es el nombre de la CUENTA, no el de la empresa: si la cuenta representa a
+ * varias, sus razones sociales salen del padrón y se editan por separado.
+ */
+export function renombrarCliente(clienteId: string, razonSocial: string): Promise<Cliente> {
+  return pedir<Cliente>(`/clientes/${encodeURIComponent(clienteId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ razonSocial }),
+  });
+}
+
+/**
  * Sincroniza UNA empresa.
  *
  * Distinto de `sincronizarCompleto`, que recorre la cuenta entera en una pasada

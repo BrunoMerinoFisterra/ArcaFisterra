@@ -1200,6 +1200,44 @@ for (const [motor, crearRepo] of MOTORES) {
       }
     });
 
+    test('renombrar una cuenta ajena da 404 y no la toca', async () => {
+      const s = await levantar(crearRepo);
+      try {
+        const ayudante = await s.login('ayudante@fisterra.com');
+        const admin = await s.login('bruno@fisterra.com');
+
+        // c3 no esta asignada al ayudante. 404 y no 403, igual que todo lo que
+        // pasa por `clienteVisible`: confirmar que el id existe ya seria filtrar.
+        const ajena = await s.enviar('/clientes/c3', 'PATCH', ayudante, {
+          razonSocial: 'Secuestrada S.A.',
+        });
+        assert.equal(ajena.status, 404);
+
+        // Y no alcanzo a escribir: el UPDATE lleva el aislamiento adentro, no
+        // depende de que la ruta lo haya chequeado antes.
+        const c3 = (await (await s.get('/clientes/c3', admin)).json()) as {
+          cliente: { razonSocial: string };
+        };
+        assert.notEqual(c3.cliente.razonSocial, 'Secuestrada S.A.');
+
+        // La propia si, y sin ser admin: renombrar no es un dato sensible ni
+        // consume cupo, igual que nombrar un contribuyente.
+        const propia = await s.enviar('/clientes/c1', 'PATCH', ayudante, {
+          razonSocial: 'Molinos del Sur S.A.U.',
+        });
+        assert.equal(propia.status, 200);
+        assert.equal(
+          ((await propia.json()) as { razonSocial: string }).razonSocial,
+          'Molinos del Sur S.A.U.',
+        );
+
+        const vacia = await s.enviar('/clientes/c1', 'PATCH', ayudante, { razonSocial: '   ' });
+        assert.equal(vacia.status, 400);
+      } finally {
+        await s.cerrar();
+      }
+    });
+
     test('una cuenta comun no puede repartir permisos de admin', async () => {
       const s = await levantar(crearRepo);
       try {

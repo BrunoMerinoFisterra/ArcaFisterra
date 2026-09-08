@@ -9,6 +9,7 @@ import {
   listarEmpresasDeCliente,
   obtenerAdministracionClientes,
   pedirAccesoAEmpresa,
+  renombrarCliente,
   sincronizarCompleto,
   validarCuit,
 } from '../api/client';
@@ -22,7 +23,7 @@ import type {
 import { desde } from '../lib/format';
 import { Badge, EstadoSyncBadge } from '../components/Badge';
 import { ModalCargando } from '../components/ModalCargando';
-import { NombreContribuyente } from '../components/NombreContribuyente';
+import { NombreEditable } from '../components/NombreEditable';
 import { plural } from '../lib/plural';
 
 export default function Clientes() {
@@ -228,6 +229,13 @@ export default function Clientes() {
                         onCredencial={(usuarioCuit, clave) =>
                           accion(() => guardarCredencial(c.id, usuarioCuit, clave))
                         }
+                        // Sin `accion`: ese helper se traga el error en un
+                        // cartel de la página, y acá el editor inline tiene que
+                        // poder mostrarlo y quedarse abierto con lo tipeado.
+                        onRenombrar={async (razonSocial) => {
+                          await renombrarCliente(c.id, razonSocial);
+                          await recargar();
+                        }}
                         onSincronizar={() => void sincronizarCliente(c)}
                       />
                     </td>
@@ -423,11 +431,14 @@ function PanelGestion({
   cliente,
   bloqueadoPorCupo,
   onCredencial,
+  onRenombrar,
   onSincronizar,
 }: {
   cliente: Cliente;
   bloqueadoPorCupo: boolean;
   onCredencial: (usuarioCuit: string, clave: string) => void;
+  /** Relanza si falla: el editor inline muestra el error y no se cierra. */
+  onRenombrar: (razonSocial: string) => Promise<void>;
   onSincronizar: () => void;
 }) {
   const [usuarioCuit, setUsuarioCuit] = useState(cliente.cuit);
@@ -442,6 +453,25 @@ function PanelGestion({
             La empresa sigue asignada, pero sólo un administrador puede quitarla. Contactalo para
             regularizar la cuenta.
           </p>
+        </div>
+      )}
+
+      {/* Va sin número y primero: los tres bloques de abajo son el flujo de
+          puesta en marcha, y esto es una propiedad de la cuenta que se corrige
+          en cualquier momento. */}
+      {!bloqueadoPorCupo && (
+        <div className="gestion__bloque gestion__bloque--clientes">
+          <h3>Nombre de la cuenta</h3>
+          <p className="tenue">
+            Es el nombre de la clave fiscal, no el de las empresas que representa: esas se nombran
+            abajo y su razón social sale del padrón. El CUIT no se cambia acá.
+          </p>
+          <NombreEditable
+            id={cliente.id}
+            etiqueta={`Nombre de la cuenta ${cliente.cuit}`}
+            nombre={cliente.razonSocial}
+            alGuardar={(_id, razonSocial) => onRenombrar(razonSocial)}
+          />
         </div>
       )}
 
@@ -582,8 +612,9 @@ function EmpresasDeLaCuenta({ cliente }: { cliente: Cliente }) {
                 <span className="mono">{empresa.cuit}</span>
                 {empresa.esTitular && <Badge tono="neutro">Titular</Badge>}
               </div>
-              <NombreContribuyente
-                cuit={empresa.cuit}
+              <NombreEditable
+                id={empresa.cuit}
+                etiqueta={`Razón social de ${empresa.cuit}`}
                 // `undefined` y no el CUIT de relleno: es lo que hace que el
                 // botón ofrezca "Poner nombre" en vez de "Editar nombre" y que
                 // el input arranque vacío en lugar de con el número adentro.

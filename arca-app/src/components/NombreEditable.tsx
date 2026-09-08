@@ -1,27 +1,31 @@
 import { useState } from 'react';
 
 /**
- * Razón social de un contribuyente, con carga inline.
+ * Un nombre que se edita en el lugar.
  *
- * El CUIT NO se tipea: siempre sale del dato que ya está en pantalla. Eso evita
- * el error más probable de un formulario suelto — cargar un nombre contra un
- * CUIT mal escrito, que después no matchea con nada y nadie nota, porque el
- * grupo sigue mostrándose sin nombre.
+ * El identificador NO se tipea: siempre sale del dato que ya está en pantalla.
+ * Eso evita el error más probable de un formulario suelto — guardar un nombre
+ * contra un CUIT mal escrito, que después no matchea con nada y nadie nota,
+ * porque el grupo sigue mostrándose sin nombre.
  *
- * Vive acá y no en una pantalla porque se usa desde dos lugares que llegan al
- * mismo CUIT por caminos distintos: los grupos del detalle, que sólo existen
- * cuando esa empresa tiene datos en ese módulo, y la lista de empresas de la
- * cuenta, que las muestra todas — tengan movimientos o no.
+ * Nombra dos cosas que NO son lo mismo y por eso `etiqueta` viene de afuera en
+ * vez de armarse acá: la razón social de un CUIT del padrón, que es global y
+ * puede faltar, y el nombre de una cuenta de acceso, que siempre existe porque
+ * se carga en el alta.
  */
-export function NombreContribuyente({
-  cuit,
+export function NombreEditable({
+  id,
+  etiqueta,
   nombre,
   alGuardar,
 }: {
-  cuit: string;
-  /** `undefined` cuando todavía no hay razón social cargada. */
+  /** Lo que identifica a lo que se nombra: un CUIT, el id de una cuenta. */
+  id: string;
+  /** Para el lector de pantalla, p. ej. "Razón social de 30-71201119-6". */
+  etiqueta: string;
+  /** `undefined` cuando todavía no hay nombre cargado. */
   nombre: string | undefined;
-  alGuardar: (cuit: string, nombre: string) => Promise<void>;
+  alGuardar: (id: string, nombre: string) => Promise<void>;
 }) {
   const [editando, setEditando] = useState(false);
   const [valor, setValor] = useState(nombre ?? '');
@@ -32,7 +36,7 @@ export function NombreContribuyente({
     setGuardando(true);
     setError(null);
     try {
-      await alGuardar(cuit, valor.trim());
+      await alGuardar(id, valor.trim());
       setEditando(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'No se pudo guardar el nombre.');
@@ -66,7 +70,7 @@ export function NombreContribuyente({
         value={valor}
         onChange={(e) => setValor(e.target.value)}
         placeholder="Razón social"
-        aria-label={`Razón social de ${cuit}`}
+        aria-label={etiqueta}
         autoFocus
         onKeyDown={(e) => {
           if (e.key === 'Enter' && valor.trim().length >= 2) void guardar();

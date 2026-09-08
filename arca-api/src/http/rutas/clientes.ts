@@ -31,6 +31,9 @@ const esquemaSolicitud = z.object({
 
 const esquemaLectura = z.object({ leido: z.boolean() });
 
+/** Mismo largo que el alta: es exactamente el mismo campo. */
+const esquemaRenombre = z.object({ razonSocial: z.string().trim().min(1).max(200) });
+
 export function rutasClientes(repo: Repositorio, config: Config): Router {
   const router = Router();
   router.use(requiereAuth(config.jwtSecret, repo));
@@ -287,6 +290,37 @@ export function rutasClientes(repo: Repositorio, config: Config): Router {
       comprobantes,
       contribuyentes,
     });
+  });
+
+  /**
+   * Corrige la razón social de la cuenta.
+   *
+   * No exige admin, por lo mismo que `PUT /contribuyentes/:cuit`: no es un dato
+   * sensible, no consume cupo y pedir un administrador para arreglar un nombre
+   * mal tipeado sería fricción sin ganancia. Quien puede ver la cuenta puede
+   * nombrarla.
+   *
+   * El CUIT no se toca acá. Cambiarlo mueve de contribuyente toda la carpeta ya
+   * bajada y hay que reconvertir la credencial, que es lo que hace
+   * `scripts/corregir-cliente-cuit.ts` — no es un renombre.
+   */
+  router.patch('/:id', async (req, res) => {
+    const usuario = usuarioDe(req);
+    const cliente = await clienteVisible(req.params['id'], usuario.id);
+
+    const parseo = esquemaRenombre.safeParse(req.body);
+    if (!parseo.success) {
+      throw new ErrorHttp(400, 'La razón social tiene que tener entre 1 y 200 caracteres.');
+    }
+
+    const actualizado = await repo.renombrarClienteDe(
+      usuario.id,
+      cliente.id,
+      parseo.data.razonSocial,
+    );
+    // 404 y no 500: entre `clienteVisible` y esto la asignación pudo caerse.
+    if (!actualizado) throw clienteNoEncontrado();
+    res.json(actualizado);
   });
 
   router.post('/', async (req, res) => {
