@@ -28,6 +28,29 @@ test('no confunde una pantalla normal que apenas menciona el CUIT', () => {
   assert.equal(detectarError('Administrador de Relaciones'), null);
 });
 
+/**
+ * Copiado del artifact del 2026-09-14: ARCA dejo entrar —la pagina muestra el
+ * CUIT y "Clave Fiscal Nivel: 3"— y redirigio a la pantalla de cambio forzado.
+ */
+const CARTEL_CAMBIO_FORZADO =
+  'Cambiar Clave Fiscal Por medidas de seguridad tenés que cambiar tu contraseña';
+
+test('reconoce el cambio de clave forzado, que vosea y dice "contraseña"', () => {
+  const error = detectarError(CARTEL_CAMBIO_FORZADO);
+
+  assert.equal(error?.code, 'CLAVE_VENCIDA');
+  // Lo que importa: que pida intervencion humana en vez de caer en DESCONOCIDO.
+  // Cuando caia ahi, la credencial quedaba en OK y el panel dejaba reintentar
+  // contra una clave que ARCA ya estaba rechazando.
+  assert.equal(error?.reaccion, 'NECESITA_HUMANO');
+});
+
+test('el titulo del menu "Cambiar Clave Fiscal" solo no alcanza', () => {
+  // Es una opcion del portal y aparece en pantallas sanas: matchearla seria el
+  // mismo falso positivo que dio "administrador de relaciones" en su momento.
+  assert.equal(detectarError('Cambiar Clave Fiscal'), null);
+});
+
 test('una falla de un servicio no corta los modulos que faltan', () => {
   // El caso real: la clave tiene delegado Cuentas Tributarias pero no Mis
   // Facilidades. Antes eso dejaba sin sincronizar tambien a Mis Comprobantes,

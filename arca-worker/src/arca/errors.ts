@@ -130,6 +130,18 @@ const FRASES: ReadonlyArray<readonly [string, ArcaErrorCode]> = [
   ['su clave ha expirado', 'CLAVE_VENCIDA'],
   ['clave vencida', 'CLAVE_VENCIDA'],
   ['blanqueo de clave', 'CLAVE_VENCIDA'],
+  // El cartel real de ARCA cuando fuerza el cambio: vosea y dice "contrasena",
+  // no "clave", asi que ninguna de las cuatro frases de arriba lo tocaba. El
+  // login ENTRA —la pagina muestra el CUIT y el nivel de clave— y recien
+  // despues redirige a la pantalla de cambio, asi que el modulo moria en
+  // DESCONOCIDO: la credencial seguia figurando OK y el panel dejaba reintentar
+  // un login que ya sabiamos que no iba a pasar. Paso de verdad, cuatro veces
+  // en dos minutos.
+  //
+  // NO sirve matchear el titulo "Cambiar Clave Fiscal": es una opcion del menu
+  // del portal y daria falso positivo en pantallas sanas, igual que
+  // "administrador de relaciones" mas abajo.
+  ['tenes que cambiar tu contrasena', 'CLAVE_VENCIDA'],
 
   ['codigo de seguridad', 'SEGUNDO_FACTOR'],
   ['segundo factor', 'SEGUNDO_FACTOR'],
