@@ -208,7 +208,13 @@ function Fila({
 }) {
   const hecho = item.resueltoEn !== null;
   const esNotificacion = item.tipo === 'notificacion';
-  const destino = `/cliente/${item.clienteId}?empresa=${item.contribuyenteCuit}`;
+  // Filtrar por una empresa que el detalle no reconoce da 404 y la pantalla
+  // dice "No existe ese cliente", que manda a buscar el problema donde no está.
+  // Cuando no se puede filtrar se entra a la cuenta entera, que al menos tiene
+  // la fila adentro.
+  const destino = item.empresaNavegable
+    ? `/cliente/${item.clienteId}?empresa=${item.contribuyenteCuit}`
+    : `/cliente/${item.clienteId}`;
 
   return (
     <li className={hecho ? 'agenda__fila agenda__fila--hecha' : 'agenda__fila'}>
@@ -236,8 +242,22 @@ function Fila({
       </div>
 
       <div className="agenda__empresa">
-        <Link to={destino}>{item.empresa}</Link>
-        <div className="tenue">vía {item.cuenta}</div>
+        <Link
+          to={destino}
+          title={
+            item.empresaNavegable
+              ? undefined
+              : 'ARCA no ofrece esta empresa en ningún servicio todavía, así que abre la cuenta entera'
+          }
+        >
+          {item.empresa}
+        </Link>
+        {/* El "vía" sólo cuando la empresa NO es la titular. Si son el mismo
+            CUIT, repetir el nombre dos veces hacía parecer que la fila decía
+            el representante y no la empresa. */}
+        <div className="tenue">
+          {item.esTitular ? 'titular de la cuenta' : `vía ${item.cuenta}`}
+        </div>
       </div>
 
       <div className="agenda__cuando">

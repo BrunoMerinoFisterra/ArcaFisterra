@@ -248,7 +248,15 @@ export interface ItemAgenda {
   clienteId: string;
   cuenta: string;
   contribuyenteCuit: string;
+  /** Razón social del contribuyente; el CUIT si el padrón todavía no la tiene. */
   empresa: string;
+  /** La obligación es de la titular de la cuenta, no de una representada. */
+  esTitular: boolean;
+  /**
+   * Si el detalle acepta `?empresa=` con este CUIT. Cuando es false hay que
+   * entrar a la cuenta entera: el filtro daría 404.
+   */
+  empresaNavegable: boolean;
   titulo: string;
   detalle: string;
   fecha: string | null;

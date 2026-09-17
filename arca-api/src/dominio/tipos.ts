@@ -221,7 +221,25 @@ export interface ItemAgenda {
   /** Razón social de la CUENTA, para saber con qué clave fiscal se entra. */
   cuenta: string;
   contribuyenteCuit: string;
+  /** Razón social del contribuyente; el CUIT si el padrón todavía no la tiene. */
   empresa: string;
+  /**
+   * La obligación es de la titular de la cuenta, no de una representada.
+   *
+   * Sin esto la fila mostraba el MISMO nombre en «empresa» y en «vía», porque
+   * los dos salen del mismo CUIT, y se leía como que sólo decía el
+   * representante.
+   */
+  esTitular: boolean;
+  /**
+   * Si el detalle acepta `?empresa=` con este CUIT.
+   *
+   * La ruta de detalle valida contra `arca_representados`, que sólo tiene lo
+   * que el worker vio ofrecido en los desplegables de cada servicio. Cuentas
+   * Tributarias informa obligaciones de CUIT que nunca aparecieron ahí, así que
+   * enlazar filtrado sin preguntar daba 404 en la mayoría de las filas.
+   */
+  empresaNavegable: boolean;
   titulo: string;
   detalle: string;
   fecha: string | null;

@@ -89,6 +89,11 @@ export async function armarAgenda(
       vencimientos: await repo.vencimientosDe(cliente.id),
       ddjj: await repo.ddjjPendientesDe(cliente.id),
       notificaciones: await repo.notificacionesDe(cliente.id),
+      // Para saber a cuáles se puede entrar filtrado: es exactamente la lista
+      // contra la que valida `GET /clientes/:id?empresa=`.
+      representados: new Set(
+        (await repo.empresasDe(cliente.id)).map((e) => e.cuit.replace(/\D/g, '')),
+      ),
     })),
   );
 
@@ -104,9 +109,15 @@ export async function armarAgenda(
 
   const items: ItemAgenda[] = [];
 
-  for (const { cliente, vencimientos, ddjj, notificaciones } of porCliente) {
+  for (const { cliente, vencimientos, ddjj, notificaciones, representados } of porCliente) {
     const marcaDe = (tipo: string, clave: string) =>
       marcas.get(`${cliente.id}|${tipo}|${clave}`) ?? null;
+    const digitosCuenta = cliente.cuit.replace(/\D/g, '');
+    /** Comparado en dígitos: las dos puntas salen de tablas que formatean distinto. */
+    const deQuien = (cuit: string) => ({
+      esTitular: cuit.replace(/\D/g, '') === digitosCuenta,
+      empresaNavegable: representados.has(cuit.replace(/\D/g, '')),
+    });
 
     for (const v of vencimientos) {
       const dias = diasHasta(v.fecha);
@@ -121,6 +132,7 @@ export async function armarAgenda(
         cuenta: cliente.razonSocial,
         contribuyenteCuit: v.contribuyenteCuit,
         empresa: empresaDe(v.contribuyenteCuit),
+        ...deQuien(v.contribuyenteCuit),
         titulo: v.impuesto,
         detalle: [v.concepto, v.subconcepto, v.periodo, v.anticipoCuota, v.detalle]
           .filter(Boolean)
@@ -142,6 +154,7 @@ export async function armarAgenda(
         cuenta: cliente.razonSocial,
         contribuyenteCuit: d.contribuyenteCuit,
         empresa: empresaDe(d.contribuyenteCuit),
+        ...deQuien(d.contribuyenteCuit),
         titulo: d.impuesto,
         detalle: [d.establecimiento, d.concepto, d.subconcepto, d.periodo]
           .filter(Boolean)
@@ -164,6 +177,7 @@ export async function armarAgenda(
         cuenta: cliente.razonSocial,
         contribuyenteCuit: n.contribuyenteCuit,
         empresa: empresaDe(n.contribuyenteCuit),
+        ...deQuien(n.contribuyenteCuit),
         titulo: n.asunto,
         detalle: n.organismo,
         fecha: n.fecha,
