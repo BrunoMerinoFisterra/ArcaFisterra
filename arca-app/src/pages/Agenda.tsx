@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ErrorApi, marcarResuelto, obtenerAgenda } from '../api/client';
 import type { Agenda as AgendaDatos, ItemAgenda, TipoPendiente } from '../types';
@@ -20,8 +20,24 @@ import { Badge } from '../components/Badge';
 
 const VENTANAS = [7, 15, 30, 60];
 
+type Agrupacion = 'urgencia' | 'empresa' | 'cuenta' | 'tipo';
+type TipoItem = ItemAgenda['tipo'];
+
+const AGRUPACIONES: ReadonlyArray<[Agrupacion, string]> = [
+  ['urgencia', 'Urgencia'],
+  ['empresa', 'Empresa'],
+  ['cuenta', 'Cuenta'],
+  ['tipo', 'Tipo'],
+];
+
+const ETIQUETA_TIPO: Record<TipoItem, string> = {
+  vencimiento: 'Vencimientos',
+  ddjj: 'DDJJ pendientes',
+  notificacion: 'Comunicaciones',
+};
+
 /** Los cortes que un contador usa igual cuando mira una lista de vencimientos. */
-function bloqueDe(item: ItemAgenda): string {
+function bloqueDeUrgencia(item: ItemAgenda): string {
   if (item.dias === null) return 'Sin fecha informada';
   if (item.dias < 0) return 'Vencido';
   if (item.dias <= 1) return 'Hoy y mañana';
@@ -29,9 +45,51 @@ function bloqueDe(item: ItemAgenda): string {
   return 'Más adelante';
 }
 
-const ORDEN_BLOQUES = ['Vencido', 'Hoy y mañana', 'Esta semana', 'Más adelante', 'Sin fecha informada'];
+const ORDEN_URGENCIA = [
+  'Vencido',
+  'Hoy y mañana',
+  'Esta semana',
+  'Más adelante',
+  'Sin fecha informada',
+];
+
+function claveGrupo(item: ItemAgenda, agrupacion: Agrupacion): string {
+  if (agrupacion === 'empresa') return item.empresa;
+  if (agrupacion === 'cuenta') return item.cuenta;
+  if (agrupacion === 'tipo') return ETIQUETA_TIPO[item.tipo];
+  return bloqueDeUrgencia(item);
+}
 
 const idDe = (i: ItemAgenda) => `${i.clienteId}|${i.tipo}|${i.clave}`;
+
+/**
+ * Qué grupos quedaron plegados, entre visitas.
+ *
+ * En `localStorage` y no en el estado a secas porque si no se despliega todo
+ * cada vez que se entra, y plegar "Más adelante" una vez por sesión es
+ * exactamente el trabajo que esta función viene a ahorrar. Es una comodidad de
+ * cada navegador: nada que deba viajar al servidor.
+ */
+const CLAVE_PLEGADOS = 'arcapanel.agenda.plegados';
+
+function leerPlegados(): Set<string> {
+  try {
+    const guardado = localStorage.getItem(CLAVE_PLEGADOS);
+    return new Set(guardado ? (JSON.parse(guardado) as string[]) : []);
+  } catch {
+    // Modo privado, almacenamiento bloqueado o un JSON viejo y roto: se arranca
+    // con todo desplegado, que es el estado por defecto igual.
+    return new Set();
+  }
+}
+
+function guardarPlegados(plegados: Set<string>): void {
+  try {
+    localStorage.setItem(CLAVE_PLEGADOS, JSON.stringify([...plegados]));
+  } catch {
+    // No poder recordarlo no es motivo para romper la pantalla.
+  }
+}
 
 export default function Agenda() {
   const [datos, setDatos] = useState<AgendaDatos | null>(null);
@@ -40,6 +98,11 @@ export default function Agenda() {
   const [ventana, setVentana] = useState(15);
   const [verResueltos, setVerResueltos] = useState(false);
   const [enVuelo, setEnVuelo] = useState<string | null>(null);
+
+  const [agrupacion, setAgrupacion] = useState<Agrupacion>('urgencia');
+  const [tiposOcultos, setTiposOcultos] = useState<Set<TipoItem>>(new Set());
+  const [busqueda, setBusqueda] = useState('');
+  const [plegados, setPlegados] = useState<Set<string>>(leerPlegados);
 
   useEffect(() => {
     let vigente = true;
@@ -58,6 +121,25 @@ export default function Agenda() {
       vigente = false;
     };
   }, [ventana]);
+
+  function alternarPlegado(nombre: string) {
+    setPlegados((actuales) => {
+      const siguiente = new Set(actuales);
+      if (siguiente.has(nombre)) siguiente.delete(nombre);
+      else siguiente.add(nombre);
+      guardarPlegados(siguiente);
+      return siguiente;
+    });
+  }
+
+  function alternarTipo(tipo: TipoItem) {
+    setTiposOcultos((actuales) => {
+      const siguiente = new Set(actuales);
+      if (siguiente.has(tipo)) siguiente.delete(tipo);
+      else siguiente.add(tipo);
+      return siguiente;
+    });
+  }
 
   /**
    * Marca y refleja el cambio sin recargar la agenda entera.
@@ -95,6 +177,42 @@ export default function Agenda() {
     }
   }
 
+  const grupos = useMemo(() => {
+    const texto = busqueda.trim().toLowerCase();
+    const visibles = (datos?.items ?? []).filter((i) => {
+      if (!verResueltos && i.resueltoEn !== null) return false;
+      if (tiposOcultos.has(i.tipo)) return false;
+      if (!texto) return true;
+      return [i.empresa, i.cuenta, i.titulo, i.detalle, i.contribuyenteCuit]
+        .join(' ')
+        .toLowerCase()
+        .includes(texto);
+    });
+
+    const porNombre = new Map<string, ItemAgenda[]>();
+    // `visibles` ya viene ordenado por fecha desde el servidor, así que cada
+    // grupo hereda ese orden sin volver a ordenar nada adentro.
+    for (const item of visibles) {
+      const nombre = claveGrupo(item, agrupacion);
+      porNombre.set(nombre, [...(porNombre.get(nombre) ?? []), item]);
+    }
+
+    const lista = [...porNombre.entries()].map(([nombre, items]) => ({ nombre, items }));
+    if (agrupacion === 'urgencia') {
+      return lista.sort(
+        (a, b) => ORDEN_URGENCIA.indexOf(a.nombre) - ORDEN_URGENCIA.indexOf(b.nombre),
+      );
+    }
+    // Agrupando por empresa, cuenta o tipo, los grupos se ordenan por lo más
+    // urgente que tengan adentro y no alfabéticamente: la empresa con algo
+    // vencido tiene que quedar arriba, que es para lo que se abre la pantalla.
+    const urgenciaDe = (items: ItemAgenda[]) =>
+      Math.min(...items.map((i) => (i.dias === null ? Number.MAX_SAFE_INTEGER : i.dias)));
+    return lista.sort(
+      (a, b) => urgenciaDe(a.items) - urgenciaDe(b.items) || a.nombre.localeCompare(b.nombre),
+    );
+  }, [datos, verResueltos, tiposOcultos, busqueda, agrupacion]);
+
   if (bloqueoCupo) {
     return (
       <div className="aviso aviso--bloqueo" role="alert">
@@ -107,11 +225,9 @@ export default function Agenda() {
     );
   }
 
-  const visibles = (datos?.items ?? []).filter((i) => verResueltos || i.resueltoEn === null);
-  const bloques = ORDEN_BLOQUES.map((nombre) => ({
-    nombre,
-    items: visibles.filter((i) => bloqueDe(i) === nombre),
-  })).filter((b) => b.items.length > 0);
+  const todosPlegados = grupos.length > 0 && grupos.every((g) => plegados.has(g.nombre));
+  const mostrados = grupos.reduce((total, g) => total + g.items.length, 0);
+  const hayFiltro = busqueda.trim().length > 0 || tiposOcultos.size > 0;
 
   return (
     <>
@@ -150,9 +266,52 @@ export default function Agenda() {
               </option>
             ))}
           </select>
-          <span className="campo__ayuda">Lo ya vencido se muestra siempre, esté donde esté.</span>
+          <span className="campo__ayuda">Lo ya vencido se muestra siempre.</span>
         </label>
-        <label className="agenda-controles__check">
+
+        <label className="campo">
+          <span className="campo__etiqueta">Agrupar por</span>
+          <select
+            value={agrupacion}
+            onChange={(e) => setAgrupacion(e.target.value as Agrupacion)}
+          >
+            {AGRUPACIONES.map(([valor, etiqueta]) => (
+              <option key={valor} value={valor}>
+                {etiqueta}
+              </option>
+            ))}
+          </select>
+          <span className="campo__ayuda">Dentro de cada grupo, siempre por fecha.</span>
+        </label>
+
+        <label className="campo campo--ancho">
+          <span className="campo__etiqueta">Buscar</span>
+          <input
+            type="search"
+            value={busqueda}
+            onChange={(e) => setBusqueda(e.target.value)}
+            placeholder="Empresa, cuenta, impuesto, CUIT…"
+          />
+        </label>
+      </div>
+
+      <div className="agenda-filtros">
+        {(Object.keys(ETIQUETA_TIPO) as TipoItem[]).map((tipo) => {
+          const activo = !tiposOcultos.has(tipo);
+          return (
+            <button
+              key={tipo}
+              type="button"
+              className={activo ? 'chip chip--activo' : 'chip'}
+              aria-pressed={activo}
+              onClick={() => alternarTipo(tipo)}
+            >
+              {ETIQUETA_TIPO[tipo]}
+            </button>
+          );
+        })}
+
+        <label className="agenda-filtros__check">
           <input
             type="checkbox"
             checked={verResueltos}
@@ -160,40 +319,127 @@ export default function Agenda() {
           />
           Ver lo que ya di por hecho
         </label>
+
+        {grupos.length > 0 && (
+          <button
+            type="button"
+            className="enlace agenda-filtros__plegar"
+            onClick={() =>
+              setPlegados(() => {
+                const siguiente = todosPlegados
+                  ? new Set<string>()
+                  : new Set(grupos.map((g) => g.nombre));
+                guardarPlegados(siguiente);
+                return siguiente;
+              })
+            }
+          >
+            {todosPlegados ? 'Desplegar todo' : 'Plegar todo'}
+          </button>
+        )}
       </div>
 
       {datos === null && !error && <p className="vacio">Cargando agenda…</p>}
 
-      {datos !== null && bloques.length === 0 && (
+      {datos !== null && grupos.length === 0 && (
         <p className="vacio">
-          No hay nada pendiente en los próximos {datos.ventanaDias} días.
-          {datos.resueltos > 0 && !verResueltos && (
-            <>
-              {' '}
-              Hay {plural(datos.resueltos, 'ítem dado por hecho', 'ítems dados por hechos')}.
-            </>
+          {hayFiltro
+            ? 'Nada coincide con el filtro.'
+            : `No hay nada pendiente en los próximos ${datos.ventanaDias} días.`}
+          {datos.resueltos > 0 && !verResueltos && !hayFiltro && (
+            <> Hay {plural(datos.resueltos, 'ítem dado por hecho', 'ítems dados por hechos')}.</>
           )}
         </p>
       )}
 
-      {bloques.map((bloque) => (
-        <section className="bloque" key={bloque.nombre}>
-          <h2 className="bloque__titulo">
-            {bloque.nombre} · {plural(bloque.items.length, 'ítem', 'ítems')}
-          </h2>
+      {datos !== null && grupos.length > 0 && hayFiltro && (
+        <p className="tenue agenda-conteo">
+          {plural(mostrados, 'ítem', 'ítems')} en {plural(grupos.length, 'grupo', 'grupos')}.
+        </p>
+      )}
+
+      {grupos.map((grupo) => (
+        <Grupo
+          key={grupo.nombre}
+          nombre={grupo.nombre}
+          items={grupo.items}
+          plegado={plegados.has(grupo.nombre)}
+          alPlegar={() => alternarPlegado(grupo.nombre)}
+          enVuelo={enVuelo}
+          alAlternar={alternar}
+        />
+      ))}
+    </>
+  );
+}
+
+/**
+ * Un grupo plegable.
+ *
+ * Reusa las clases del plegable del detalle del cliente —`seccion__desplegar`,
+ * el chevron y `seccion__animacion`— para no tener dos plegables distintos en
+ * el mismo panel. Lo único propio es el contenedor, que acá es un bloque suelto
+ * y no un panel.
+ */
+function Grupo({
+  nombre,
+  items,
+  plegado,
+  alPlegar,
+  enVuelo,
+  alAlternar,
+}: {
+  nombre: string;
+  items: ItemAgenda[];
+  plegado: boolean;
+  alPlegar: () => void;
+  enVuelo: string | null;
+  alAlternar: (item: ItemAgenda) => void;
+}) {
+  const contenidoId = useId();
+  const vencidos = items.filter((i) => i.dias !== null && i.dias < 0).length;
+
+  return (
+    <section className={`bloque bloque--plegable${plegado ? '' : ' bloque--abierto'}`}>
+      <h2 className="bloque__titulo">
+        <button
+          type="button"
+          className="seccion__desplegar"
+          aria-expanded={!plegado}
+          aria-controls={contenidoId}
+          aria-label={`${plegado ? 'Desplegar' : 'Plegar'} ${nombre}`}
+          onClick={alPlegar}
+        >
+          <span className="seccion__chevron" aria-hidden="true">
+            ▸
+          </span>
+          <span>{nombre}</span>
+          <span className="tenue">· {plural(items.length, 'ítem', 'ítems')}</span>
+          {/* Plegado, el contador de vencidos es lo único que justifica volver
+              a abrirlo: sin esto hay que desplegar para saber si importa. */}
+          {plegado && vencidos > 0 && <Badge tono="error">{vencidos} vencido{vencidos > 1 ? 's' : ''}</Badge>}
+        </button>
+      </h2>
+      <div
+        id={contenidoId}
+        className="seccion__animacion"
+        aria-hidden={plegado}
+        inert={plegado ? true : undefined}
+      >
+        <div className="seccion__contenido">
           <ul className="agenda">
-            {bloque.items.map((item) => (
+            {items.map((item) => (
               <Fila
                 key={idDe(item)}
                 item={item}
                 guardando={enVuelo === idDe(item)}
-                alAlternar={() => void alternar(item)}
+                alAlternar={() => void alAlternar(item)}
               />
             ))}
           </ul>
-        </section>
-      ))}
-    </>
+        </div>
+      </div>
+    </section>
   );
 }
 

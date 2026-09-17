@@ -610,7 +610,12 @@ body {
   transition: transform 150ms ease;
 }
 
-.seccion--abierta .seccion__chevron {
+/* `.bloque--abierto` se suma acá y en la animación de abajo para que la agenda
+   reuse ESTE plegable en vez de tener el suyo. La diferencia entre los dos es
+   sólo el contenedor: `.seccion` es un panel, `.bloque` va suelto sobre el
+   fondo. El comportamiento y la accesibilidad son los mismos. */
+.seccion--abierta .seccion__chevron,
+.bloque--abierto .seccion__chevron {
   transform: rotate(90deg);
 }
 
@@ -626,7 +631,8 @@ body {
     visibility 0s linear 320ms;
 }
 
-.seccion--abierta .seccion__animacion {
+.seccion--abierta .seccion__animacion,
+.bloque--abierto .seccion__animacion {
   grid-template-rows: 1fr;
   opacity: 1;
   visibility: visible;
@@ -1255,6 +1261,59 @@ body {
   gap: 7px;
   padding-bottom: 6px;
   font-size: 13px;
+}
+
+.agenda-filtros {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.agenda-filtros__check {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+}
+/* Empuja "Plegar todo" al final: no es un filtro, es una acción sobre lo que
+   ya quedó filtrado, y mezclarla entre los chips la hace parecer uno más. */
+.agenda-filtros__plegar {
+  margin-left: auto;
+}
+.agenda-conteo {
+  margin: -6px 0 12px;
+}
+
+/* Chip de filtro: apagado se lee como "esto no se está mostrando". */
+.chip {
+  padding: 5px 13px;
+  border: 1px solid var(--borde);
+  border-radius: 999px;
+  background: var(--superficie);
+  color: var(--texto-tenue);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: border-color 120ms ease, color 120ms ease;
+}
+.chip--activo {
+  border-color: var(--acento);
+  background: color-mix(in srgb, var(--acento) 8%, var(--superficie));
+  color: var(--fs-ink);
+  font-weight: 650;
+}
+.chip:focus-visible {
+  outline: 2px solid var(--primario);
+  outline-offset: 2px;
+}
+
+/* El título del grupo ES el botón de plegar: el margen lo pone el botón. */
+.bloque--plegable .bloque__titulo {
+  margin: 0;
+}
+.bloque--plegable .seccion__desplegar {
+  gap: 8px;
 }
 
 .agenda {
