@@ -199,6 +199,47 @@ export interface DeclaracionJuradaPendiente {
   fecha: string | null;
 }
 
+/** Lo que se puede dar por hecho a mano. Las comunicaciones no: ya tienen lectura. */
+export type TipoPendiente = 'vencimiento' | 'ddjj';
+
+/**
+ * Una fila de la agenda: algo que vence o algo que llegó, de cualquier empresa.
+ *
+ * Aplana tres cosas distintas en una sola lista a propósito. El contador no
+ * abre el panel preguntándose "¿qué vencimientos hay?" sino "¿qué tengo que
+ * hacer hoy?", y la respuesta mezcla obligaciones y comunicaciones.
+ */
+export interface ItemAgenda {
+  tipo: TipoPendiente | 'notificacion';
+  /**
+   * Identifica la fila entre sincronizaciones. Para vencimientos y DDJJ es el
+   * tuple natural —el `id` se regenera en cada reemplazo—; para comunicaciones
+   * es su id, que sí es estable.
+   */
+  clave: string;
+  clienteId: string;
+  /** Razón social de la CUENTA, para saber con qué clave fiscal se entra. */
+  cuenta: string;
+  contribuyenteCuit: string;
+  empresa: string;
+  titulo: string;
+  detalle: string;
+  fecha: string | null;
+  /** Días hasta `fecha`; negativo si ya venció. null cuando ARCA no la informa. */
+  dias: number | null;
+  /** Cuándo alguien lo dio por hecho acá. Siempre null en comunicaciones. */
+  resueltoEn: string | null;
+}
+
+export interface Agenda {
+  ventanaDias: number;
+  items: ItemAgenda[];
+  /** Contadores de lo NO resuelto: es lo que de verdad queda por hacer. */
+  vencidos: number;
+  proximos: number;
+  resueltos: number;
+}
+
 export type TipoComprobante = 'EMITIDO' | 'RECIBIDO';
 
 export interface Comprobante {

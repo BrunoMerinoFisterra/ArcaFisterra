@@ -19,6 +19,7 @@ import type {
   SaldoTributario,
   SolicitudAcceso,
   SyncJob,
+  TipoPendiente,
   UsuarioConHash,
   UsuarioGestion,
   Vencimiento,
@@ -511,6 +512,64 @@ export function crearRepositorioSqlite(opciones: OpcionesSqlite): Repositorio & 
           ORDER BY COALESCE(ultimo_sync, '') , razon_social`,
         anteriorAIso,
       ).map(aCliente);
+    },
+
+    async resueltosDe(usuarioId) {
+      // El IN contra arca_user_clientes es el mismo aislamiento de siempre: sin
+      // el, la agenda mostraria tildes de cuentas de otra oficina.
+      return todos<{ cliente_id: string; tipo: string; clave: string; resuelto_en: string }>(
+        `SELECT cliente_id, tipo, clave, resuelto_en
+           FROM arca_resueltos
+          WHERE cliente_id IN (
+            SELECT cliente_id FROM arca_user_clientes WHERE usuario_id = ?
+          )`,
+        usuarioId,
+      ).map((f) => ({
+        clienteId: f.cliente_id,
+        tipo: f.tipo as TipoPendiente,
+        clave: f.clave,
+        resueltoEn: f.resuelto_en,
+      }));
+    },
+
+    async marcarResuelto(usuarioId, clienteId, tipo, clave, resuelto) {
+      // La visibilidad y la escritura van en la MISMA transaccion. Chequear
+      // antes y escribir despues deja una ventana en la que la asignacion puede
+      // caerse entre las dos consultas.
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        const visible =
+          uno('SELECT 1 AS x FROM arca_user_clientes WHERE usuario_id = ? AND cliente_id = ?',
+            usuarioId, clienteId) !== null;
+        if (!visible) {
+          db.exec('COMMIT');
+          return false;
+        }
+        if (resuelto) {
+          correr(
+            `INSERT INTO arca_resueltos (cliente_id, tipo, clave, resuelto_en)
+             VALUES (?, ?, ?, ?)
+             ON CONFLICT (cliente_id, tipo, clave)
+               DO UPDATE SET resuelto_en = excluded.resuelto_en`,
+            clienteId,
+            tipo,
+            clave,
+            new Date().toISOString(),
+          );
+        } else {
+          correr(
+            'DELETE FROM arca_resueltos WHERE cliente_id = ? AND tipo = ? AND clave = ?',
+            clienteId,
+            tipo,
+            clave,
+          );
+        }
+        db.exec('COMMIT');
+        return true;
+      } catch (error) {
+        db.exec('ROLLBACK');
+        throw error;
+      }
     },
 
     async nombresDeContribuyentes(cuits) {

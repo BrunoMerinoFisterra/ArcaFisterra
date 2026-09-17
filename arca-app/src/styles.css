@@ -1227,6 +1227,107 @@ body {
 .empresas-cuenta__visto {
   margin-left: auto;
 }
+
+/* --- Agenda (en prueba) --- */
+.nav__prueba {
+  margin-left: 5px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--neutro-fondo);
+  color: var(--texto-tenue);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  vertical-align: middle;
+}
+
+.agenda-controles {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 18px;
+  margin-bottom: 16px;
+}
+.agenda-controles__check {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding-bottom: 6px;
+  font-size: 13px;
+}
+
+.agenda {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* Una grilla y no flex: las cuatro columnas tienen que alinearse ENTRE filas,
+   que es lo que permite barrer la lista con la vista en vez de leerla. */
+.agenda__fila {
+  display: grid;
+  grid-template-columns: auto 1fr minmax(170px, 0.6fr) 155px;
+  align-items: center;
+  gap: 14px;
+  padding: 11px 14px;
+  border: 1px solid var(--borde);
+  border-radius: 9px;
+  background: var(--superficie);
+}
+/* Lo dado por hecho no se esconde: se apaga. Sigue estando para poder destildar
+   sin ir a buscarlo, pero deja de competir por la atención. */
+.agenda__fila--hecha {
+  opacity: 0.55;
+}
+.agenda__fila--hecha .agenda__titulo {
+  text-decoration: line-through;
+}
+
+.agenda__marca {
+  width: 17px;
+  height: 17px;
+  cursor: pointer;
+}
+/* Ocupa el lugar del tilde en las comunicaciones, que no se marcan: sin esto la
+   fila corre una columna y se rompe la alineación de toda la lista. */
+.agenda__marca--vacia {
+  display: inline-block;
+  width: 17px;
+}
+
+.agenda__titulo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 650;
+  font-size: 14px;
+}
+.agenda__cuando {
+  text-align: right;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+/* "vencido hace 12 días" partido en dos renglones desalinea la fila entera y
+   rompe el barrido vertical, que es para lo que existe esta columna. */
+.agenda__cuando > div:first-child {
+  white-space: nowrap;
+}
+
+@media (max-width: 760px) {
+  /* En una columna la grilla de cuatro no entra: el tilde queda a la izquierda
+     y el resto se apila, que es como se lee en un teléfono. */
+  .agenda__fila {
+    grid-template-columns: auto 1fr;
+  }
+  .agenda__empresa,
+  .agenda__cuando {
+    grid-column: 2;
+    text-align: left;
+  }
+}
 .tabla--compacta th,
 .tabla--compacta td {
   padding-top: 7px;

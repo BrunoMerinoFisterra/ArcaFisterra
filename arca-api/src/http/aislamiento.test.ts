@@ -1200,6 +1200,69 @@ for (const [motor, crearRepo] of MOTORES) {
       }
     });
 
+    test('la agenda sólo trae ítems de las cuentas asignadas', async () => {
+      const s = await levantar(crearRepo);
+      try {
+        const ayudante = await s.login('ayudante@fisterra.com');
+        const agenda = (await (await s.get('/clientes/agenda', ayudante)).json()) as {
+          items: Array<{ clienteId: string }>;
+        };
+        // Es la vista que corta transversal a TODA la cartera, asi que es
+        // justo donde un filtro flojo se convierte en ver la carpeta ajena.
+        const ajenos = agenda.items.filter((i) => !['c1', 'c2'].includes(i.clienteId));
+        assert.deepEqual(ajenos, [], 'no puede aparecer nada de una cuenta sin asignar');
+      } finally {
+        await s.cerrar();
+      }
+    });
+
+    test('marcar resuelto algo de una cuenta ajena da 404', async () => {
+      const s = await levantar(crearRepo);
+      try {
+        const ayudante = await s.login('ayudante@fisterra.com');
+        const r = await s.enviar('/clientes/c3/resueltos', 'POST', ayudante, {
+          tipo: 'vencimiento',
+          clave: 'da-igual',
+          resuelto: true,
+        });
+        assert.equal(r.status, 404);
+      } finally {
+        await s.cerrar();
+      }
+    });
+
+    test('la marca de resuelto vuelve en la agenda y se puede deshacer', async () => {
+      const s = await levantar(crearRepo);
+      try {
+        const admin = await s.login('bruno@fisterra.com');
+        type Fila = { tipo: string; clave: string; clienteId: string; resueltoEn: string | null };
+        const traer = async () =>
+          ((await (await s.get('/clientes/agenda', admin)).json()) as { items: Fila[] }).items;
+
+        const item = (await traer()).find((i) => i.tipo === 'vencimiento');
+        assert.ok(item, 'el sembrado de demo tiene que traer algún vencimiento');
+
+        const marcar = (resuelto: boolean) =>
+          s.enviar(`/clientes/${item.clienteId}/resueltos`, 'POST', admin, {
+            tipo: 'vencimiento',
+            clave: item.clave,
+            resuelto,
+          });
+        const mismo = async () =>
+          (await traer()).find((i) => i.clienteId === item.clienteId && i.clave === item.clave);
+
+        assert.equal((await marcar(true)).status, 204);
+        // La clave es el tuple natural y no el id justamente para que la marca
+        // se reencuentre con su fila despues de la proxima sincronizacion.
+        assert.ok((await mismo())?.resueltoEn, 'la marca tiene que volver en la agenda');
+
+        assert.equal((await marcar(false)).status, 204);
+        assert.equal((await mismo())?.resueltoEn, null, 'destildar tiene que borrarla');
+      } finally {
+        await s.cerrar();
+      }
+    });
+
     test('renombrar una cuenta ajena da 404 y no la toca', async () => {
       const s = await levantar(crearRepo);
       try {

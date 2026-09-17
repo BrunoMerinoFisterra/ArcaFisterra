@@ -7,6 +7,7 @@
  */
 import type {
   AdministracionClientes,
+  Agenda,
   Cliente,
   DetalleCliente,
   EmpresaRepresentada,
@@ -15,6 +16,7 @@ import type {
   ResumenEmpresa,
   SolicitudAcceso,
   SyncJob,
+  TipoPendiente,
   Usuario,
   UsuarioGestion,
 } from '../types';
@@ -117,6 +119,32 @@ export function cambiarPasswordPropia(
   return pedir<void>('/sesion/password', {
     method: 'PATCH',
     body: JSON.stringify({ passwordActual, passwordNueva }),
+  });
+}
+
+/* --- Agenda (en prueba) --- */
+
+/** Qué vence y qué llegó, en toda la cartera. Sin `dias` usa la ventana por defecto. */
+export function obtenerAgenda(dias?: number): Promise<Agenda> {
+  return pedir<Agenda>(`/clientes/agenda${dias === undefined ? '' : `?dias=${dias}`}`);
+}
+
+/**
+ * Marca o desmarca una obligación como "ya me ocupé".
+ *
+ * La `clave` viene del propio item y no se construye acá: es el tuple natural
+ * que el servidor usa para reconocer la fila después de la próxima
+ * sincronización, cuando su `id` ya no sea el mismo.
+ */
+export function marcarResuelto(
+  clienteId: string,
+  tipo: TipoPendiente,
+  clave: string,
+  resuelto: boolean,
+): Promise<void> {
+  return pedir<void>(`/clientes/${encodeURIComponent(clienteId)}/resueltos`, {
+    method: 'POST',
+    body: JSON.stringify({ tipo, clave, resuelto }),
   });
 }
 

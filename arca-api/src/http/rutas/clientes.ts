@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import type { Config } from '../../config.js';
 import { cifrarAccesoArca } from '../../crypto/envelope.js';
+import { armarAgenda, DIAS_AGENDA } from '../../dominio/agenda.js';
 import { formatearCuit, validarCuit } from '../../dominio/cuit.js';
 import {
   armarResumen,
@@ -33,6 +34,13 @@ const esquemaLectura = z.object({ leido: z.boolean() });
 
 /** Mismo largo que el alta: es exactamente el mismo campo. */
 const esquemaRenombre = z.object({ razonSocial: z.string().trim().min(1).max(200) });
+
+const esquemaResuelto = z.object({
+  tipo: z.enum(['vencimiento', 'ddjj']),
+  /** El tuple natural de la fila. Largo porque concatena hasta 8 campos. */
+  clave: z.string().min(1).max(600),
+  resuelto: z.boolean(),
+});
 
 export function rutasClientes(repo: Repositorio, config: Config): Router {
   const router = Router();
@@ -205,6 +213,47 @@ export function rutasClientes(repo: Repositorio, config: Config): Router {
         .map((empresa) => armarResumenEmpresa(repo, empresa, cuentas.get(empresa.clienteId)!)),
     );
     res.json(resumenes.sort(porUrgenciaEmpresa));
+  });
+
+  /**
+   * La agenda: qué vence y qué llegó, en TODA la cartera.
+   *
+   * Va ANTES de `/:id`, igual que `/empresas`: si no, Express haría matchear
+   * "agenda" como si fuera un id de cliente.
+   *
+   * Es la única vista que corta transversal. El resto del panel se organiza por
+   * empresa, que es como está guardado; esto se organiza por fecha, que es como
+   * se trabaja.
+   */
+  router.get('/agenda', async (req, res) => {
+    const usuario = usuarioDe(req);
+    const pedido = Number(req.query['dias']);
+    // Un `dias` basura cae al default en vez de dar 400: es una comodidad de la
+    // pantalla, no un dato del que dependa nada.
+    const ventana =
+      Number.isInteger(pedido) && pedido >= 0 && pedido <= 365 ? pedido : DIAS_AGENDA;
+    const clientes = await repo.listarClientesDe(usuario.id);
+    res.json(await armarAgenda(repo, usuario.id, clientes, ventana));
+  });
+
+  /** Marca o desmarca una obligación como "ya me ocupé". */
+  router.post('/:id/resueltos', async (req, res) => {
+    const usuario = usuarioDe(req);
+    const cliente = await clienteVisible(req.params['id'], usuario.id);
+
+    const parseo = esquemaResuelto.safeParse(req.body);
+    if (!parseo.success) throw new ErrorHttp(400, 'Falta el tipo, la clave o el estado.');
+
+    const ok = await repo.marcarResuelto(
+      usuario.id,
+      cliente.id,
+      parseo.data.tipo,
+      parseo.data.clave,
+      parseo.data.resuelto,
+    );
+    // 404 y no 500: entre `clienteVisible` y esto la asignación pudo caerse.
+    if (!ok) throw clienteNoEncontrado();
+    res.status(204).end();
   });
 
   /** Las empresas que esta cuenta representa, para el panel y el selector. */

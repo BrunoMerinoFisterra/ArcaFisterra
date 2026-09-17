@@ -15,7 +15,7 @@ import type {
   Vencimiento,
 } from '../dominio/tipos.js';
 import { estadoNotificacion } from '../dominio/notificaciones.js';
-import type { NotificacionAdjuntoContenido, Repositorio } from './tipos.js';
+import type { NotificacionAdjuntoContenido, Repositorio, ResueltoLocal } from './tipos.js';
 
 /**
  * Repositorio en memoria con datos de demostracion. TODO ficticio.
@@ -158,6 +158,8 @@ export async function crearRepositorioMemoria(): Promise<Repositorio> {
   const credencialesSolicitud = new Map<string, CredencialCifrada>();
   /** CUIT (11 dígitos, sin guiones) -> razón social cargada a mano. */
   const nombresContribuyentes = new Map<string, string>();
+  /** Espeja arca_resueltos: `${clienteId}|${tipo}|${clave}` -> la marca. */
+  const resueltos = new Map<string, ResueltoLocal>();
   const jobs: SyncJob[] = [];
   const propietariosJob = new Map<string, string>();
   const leasesJob = new Map<string, string>();
@@ -469,6 +471,21 @@ export async function crearRepositorioMemoria(): Promise<Repositorio> {
             (cliente.ultimoSync === null || cliente.ultimoSync < anteriorAIso),
         )
         .sort((a, b) => (a.ultimoSync ?? '').localeCompare(b.ultimoSync ?? ''));
+    },
+
+    async resueltosDe(usuarioId) {
+      return [...resueltos.values()].filter((marca) => puedeVer(usuarioId, marca.clienteId));
+    },
+
+    async marcarResuelto(usuarioId, clienteId, tipo, clave, resuelto) {
+      if (!puedeVer(usuarioId, clienteId)) return false;
+      const id = `${clienteId}|${tipo}|${clave}`;
+      if (resuelto) {
+        resueltos.set(id, { clienteId, tipo, clave, resueltoEn: new Date().toISOString() });
+      } else {
+        resueltos.delete(id);
+      }
+      return true;
     },
 
     async nombresDeContribuyentes(cuits) {

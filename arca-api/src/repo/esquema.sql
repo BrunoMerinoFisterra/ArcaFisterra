@@ -317,6 +317,32 @@ CREATE TABLE IF NOT EXISTS arca_contribuyentes (
   actualizado_en TEXT NOT NULL
 );
 
+-- "Ya me ocupe de esto": marcas locales sobre vencimientos y DDJJ pendientes.
+--
+-- Tabla aparte, y NO una columna en esas tablas, por como escribe el worker:
+-- `reemplazarVencimientos` y `reemplazarDdjjPendientes` borran la foto entera
+-- del cliente y la vuelven a insertar en cada sincronizacion. Una columna ahi
+-- obligaria a snapshotear y reinyectar el estado adentro de ese mismo
+-- reemplazo —como ya hace `reemplazarPlanes` con `leido_app_en`—, o sea a tocar
+-- el camino de escritura mas delicado del sistema. Aca el DELETE no la roza y
+-- la marca sobrevive sola.
+--
+-- La clave NO puede ser el `id` de la fila: se regenera con randomUUID() en
+-- cada reemplazo. Es el mismo tuple natural que ya declara el UNIQUE de cada
+-- tabla, serializado — lo unico estable entre sincronizaciones.
+--
+-- Quedan filas huerfanas cuando ARCA deja de informar una obligacion. No
+-- molestan: sin su fila la marca no se lee nunca, y el ON DELETE CASCADE las
+-- limpia cuando se da de baja el cliente.
+CREATE TABLE IF NOT EXISTS arca_resueltos (
+  cliente_id  TEXT NOT NULL REFERENCES arca_clientes(id) ON DELETE CASCADE,
+  -- 'vencimiento' | 'ddjj'
+  tipo        TEXT NOT NULL,
+  clave       TEXT NOT NULL,
+  resuelto_en TEXT NOT NULL,
+  PRIMARY KEY (cliente_id, tipo, clave)
+);
+
 -- Candados anonimos por CUIT de acceso ARCA. `clave` es un HMAC; nunca se
 -- persiste el CUIT usado para iniciar sesion.
 CREATE TABLE IF NOT EXISTS arca_sync_locks (

@@ -12,10 +12,19 @@ import type {
   SaldoTributario,
   SolicitudAcceso,
   SyncJob,
+  TipoPendiente,
   UsuarioConHash,
   UsuarioGestion,
   Vencimiento,
 } from '../dominio/tipos.js';
+
+/** Una marca local de "resuelto", tal como se guarda. */
+export interface ResueltoLocal {
+  clienteId: string;
+  tipo: TipoPendiente;
+  clave: string;
+  resueltoEn: string;
+}
 
 /** Un comprobante recién parseado del CSV: todavía sin id propio. */
 export type ComprobanteNuevo = Omit<Comprobante, 'id' | 'clienteId'>;
@@ -308,6 +317,31 @@ export interface Repositorio {
     contribuyenteCuit?: string,
   ): Promise<DeclaracionJuradaPendiente[]>;
   comprobantesDe(clienteId: string, contribuyenteCuit?: string): Promise<Comprobante[]>;
+
+  /* --- Agenda: "ya me ocupé de esto" --- */
+
+  /**
+   * Las marcas de todas las cuentas visibles para el usuario.
+   *
+   * Se traen de una vez y se cruzan en memoria contra la agenda ya armada. Ir
+   * fila por fila serían cientos de consultas para pintar un tilde.
+   */
+  resueltosDe(usuarioId: string): Promise<ResueltoLocal[]>;
+
+  /**
+   * Marca o desmarca una obligación como resuelta. false si no es visible.
+   *
+   * La `clave` es el tuple natural de la fila, NO su `id`: el worker borra y
+   * reinserta la foto entera en cada sincronización con ids nuevos, así que una
+   * marca contra el id se perdería en el primer sync.
+   */
+  marcarResuelto(
+    usuarioId: string,
+    clienteId: string,
+    tipo: TipoPendiente,
+    clave: string,
+    resuelto: boolean,
+  ): Promise<boolean>;
 
   /**
    * Inserta o actualiza comunicaciones por el id estable que informa ARCA.

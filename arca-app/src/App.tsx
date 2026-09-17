@@ -1,4 +1,5 @@
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
+import Agenda from './pages/Agenda';
 import Dashboard from './pages/Dashboard';
 import ClienteDetalle from './pages/ClienteDetalle';
 import Clientes from './pages/Clientes';
@@ -45,6 +46,17 @@ export default function App() {
             element={
               <Protegida>
                 <Clientes />
+              </Protegida>
+            }
+          />
+          {/* En prueba. Vive en su propia URL y no reemplaza nada: la idea es
+              que los usuarios la usen unos días y recién ahí se decida si pasa
+              a ser la pantalla de entrada. */}
+          <Route
+            path="/agenda"
+            element={
+              <Protegida>
+                <Agenda />
               </Protegida>
             }
           />
@@ -106,6 +118,11 @@ function Topbar() {
         </WipeLink>
         <WipeLink to="/clientes" direccion="izquierda" className={clase('/clientes')}>
           Clientes
+        </WipeLink>
+        {/* Rotulada como prueba a propósito: que se note que está a prueba es
+            parte de lo que hace que la gente se anime a decir que no sirve. */}
+        <WipeLink to="/agenda" direccion="izquierda" className={clase('/agenda')}>
+          Agenda <span className="nav__prueba">prueba</span>
         </WipeLink>
         {esAdmin && (
           <WipeLink to="/usuarios" direccion="izquierda" className={clase('/usuarios')}>
