@@ -345,6 +345,26 @@ export function obtenerJobs(clienteId: string): Promise<SyncJob[]> {
   return pedir<SyncJob[]>(`/clientes/${encodeURIComponent(clienteId)}/jobs`);
 }
 
+/** Cuántos sondeos fallidos SEGUIDOS se toleran antes de soltar el job. */
+const SONDEOS_FALLIDOS_TOLERADOS = 5;
+
+/**
+ * ¿Vale la pena reintentar este fallo, o ya es una respuesta?
+ *
+ * Sin `ErrorApi` la request ni llegó al servidor: wifi que parpadea, mDNS que
+ * tarda, la máquina que se durmió un segundo. El job del otro lado sigue vivo y
+ * el sondeo siguiente lo va a encontrar.
+ *
+ * Con `ErrorApi` el servidor contestó y le creemos — salvo los tres códigos que
+ * significan "estoy arrancando", que es lo que devuelve Caddy mientras la API
+ * se reinicia. Un 401 cae acá y se relanza a propósito: `pedir` ya limpió el
+ * token y disparó la vuelta al login, insistir no tiene sentido.
+ */
+function esFalloTransitorio(error: unknown): boolean {
+  if (!(error instanceof ErrorApi)) return true;
+  return error.status === 502 || error.status === 503 || error.status === 504;
+}
+
 /** Mantiene el popup ligado al job real, incluso si ARCA tarda varios minutos. */
 export async function esperarJob(
   clienteId: string,
@@ -352,10 +372,19 @@ export async function esperarJob(
   alActualizar?: (job: SyncJob) => void,
 ): Promise<SyncJob> {
   const limite = Date.now() + 15 * 60_000;
+  // Una sincronización completa son ~12 minutos, o sea unos 360 sondeos. Sin
+  // esto, que UNO fallara tiraba la excepción afuera del bucle y la pantalla
+  // decía "Failed to fetch" mientras el worker seguía trabajando tranquilo.
+  let fallosSeguidos = 0;
   while (Date.now() < limite) {
-    const job = (await obtenerJobs(clienteId)).find((candidato) => candidato.id === jobId);
-    if (job) alActualizar?.(job);
-    if (job && !['PENDING', 'RUNNING'].includes(job.estado)) return job;
+    try {
+      const job = (await obtenerJobs(clienteId)).find((candidato) => candidato.id === jobId);
+      fallosSeguidos = 0;
+      if (job) alActualizar?.(job);
+      if (job && !['PENDING', 'RUNNING'].includes(job.estado)) return job;
+    } catch (error) {
+      if (!esFalloTransitorio(error) || ++fallosSeguidos > SONDEOS_FALLIDOS_TOLERADOS) throw error;
+    }
     await new Promise((resolve) => setTimeout(resolve, 2_000));
   }
   throw new Error('El worker continúa ejecutándose. Volvé a consultar el cliente en unos minutos.');
