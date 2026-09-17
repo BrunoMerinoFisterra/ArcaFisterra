@@ -71,7 +71,7 @@ export async function login(
   // No estamos en el portal y tampoco reconocimos un error conocido.
   // Vale la pena volcar el estado: casi siempre es una pantalla nueva.
   const artifact = await volcarEstado(page, 'login-destino-inesperado');
-  throw new ArcaError('DESCONOCIDO', `URL final ${page.url()} — artifacts en ${artifact}`);
+  throw new ArcaError('LOGIN_NO_RECONOCIDO', `URL final ${page.url()} — artifacts en ${artifact}`);
 }
 
 /**
@@ -94,9 +94,12 @@ async function verificarMensajeError(page: Page): Promise<void> {
         if (texto) {
           const err = detectarError(texto);
           if (err) throw err;
-          // Cartel visible pero frase no catalogada: vale registrarla para
-          // sumarla a FRASES en errors.ts.
-          throw new ArcaError('DESCONOCIDO', `cartel no catalogado: "${texto}"`);
+          // Cartel visible pero frase no catalogada. El detalle queda con el
+          // texto crudo para poder sumarlo a FRASES en errors.ts, pero la
+          // reaccion NO puede ser "revisar selectores": estamos en el login,
+          // el cartel es del login, y dejar la credencial en OK invita a
+          // reintentar contra una puerta que ARCA ya cerro.
+          throw new ArcaError('LOGIN_NO_RECONOCIDO', `cartel no catalogado: "${texto}"`);
         }
       }
     } catch (e) {

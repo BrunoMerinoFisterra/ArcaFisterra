@@ -18,6 +18,7 @@ export type ArcaErrorCode =
   | 'PORTAL_NO_DISPONIBLE'
   | 'TIMEOUT'
   | 'SELECTOR_NO_ENCONTRADO'
+  | 'LOGIN_NO_RECONOCIDO'
   | 'DESCONOCIDO';
 
 /** Que debe hacer el worker cuando ve este error. */
@@ -78,6 +79,26 @@ export const ARCA_ERRORES: Record<ArcaErrorCode, Definicion> = {
   SELECTOR_NO_ENCONTRADO: {
     reaccion: 'REVISAR_SELECTORES',
     mensaje: 'El portal de ARCA cambio y la sincronizacion necesita ajuste. Revisar.',
+  },
+  /**
+   * No entramos y no sabemos por que, pero seguimos parados en el login.
+   *
+   * Existe aparte de DESCONOCIDO porque el lugar cambia la conclusion. Un
+   * cartel raro en Cuentas Tributarias puede ser de verdad un selector que
+   * cambio, y reintentar no cuesta nada. Uno raro en el login NO: ahi todavia
+   * no llegamos a ningun servicio, asi que por construccion es la credencial o
+   * la sesion, y cada reintento es otro login fallido contra ARCA — el camino
+   * conocido a que bloqueen la cuenta del contribuyente.
+   *
+   * `NECESITA_HUMANO` y no `FRENAR_MARCAR_CREDENCIAL`: frena igual, pero no
+   * marca la clave como invalida. No lo sabemos. Puede ser un aviso nuevo, un
+   * interstitial o el portal a media asta, y dejar la credencial en INVALIDA
+   * mandaria a alguien a recargar una clave que quiza estaba bien.
+   */
+  LOGIN_NO_RECONOCIDO: {
+    reaccion: 'NECESITA_HUMANO',
+    mensaje:
+      'ARCA no dejo entrar y la pantalla no es una conocida. Entra manualmente al portal con esa clave fiscal para ver que esta pidiendo.',
   },
   DESCONOCIDO: {
     reaccion: 'REVISAR_SELECTORES',
@@ -180,7 +201,10 @@ export function cortaLaCorrida(error: unknown): boolean {
     error.reaccion === 'FRENAR_MARCAR_CREDENCIAL' ||
     error.code === 'CLAVE_VENCIDA' ||
     error.code === 'CAPTCHA_PRESENTE' ||
-    error.code === 'SEGUNDO_FACTOR'
+    error.code === 'SEGUNDO_FACTOR' ||
+    // Si no pudimos entrar, los modulos que faltan chocan contra la misma
+    // pantalla de login. Seguir es gastar intentos contra una puerta cerrada.
+    error.code === 'LOGIN_NO_RECONOCIDO'
   );
 }
 

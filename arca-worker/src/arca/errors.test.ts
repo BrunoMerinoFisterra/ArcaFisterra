@@ -77,9 +77,21 @@ test('una falla de credencial o de sesion si corta', () => {
     'CLAVE_VENCIDA',
     'CAPTCHA_PRESENTE',
     'SEGUNDO_FACTOR',
+    // Si no pudimos entrar, los modulos que faltan chocan contra el mismo login.
+    'LOGIN_NO_RECONOCIDO',
   ] as const) {
     assert.equal(cortaLaCorrida(new ArcaError(code)), true, code);
   }
+});
+
+test('un cartel desconocido EN EL LOGIN frena, no manda a revisar selectores', () => {
+  // La diferencia con DESCONOCIDO es el lugar, y cambia la conclusion. En el
+  // login todavia no llegamos a ningun servicio: no puede ser un selector de
+  // Cuentas Tributarias, es la credencial o la sesion. REVISAR_SELECTORES deja
+  // la credencial en OK y el panel invita a reintentar — cuatro veces en dos
+  // minutos, la primera vez que paso.
+  assert.equal(new ArcaError('LOGIN_NO_RECONOCIDO').reaccion, 'NECESITA_HUMANO');
+  assert.equal(new ArcaError('DESCONOCIDO').reaccion, 'REVISAR_SELECTORES');
 });
 
 test('un error que no es de ARCA no corta por si solo', () => {
